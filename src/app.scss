@@ -406,13 +406,13 @@ html.dark .separator {
   &.articles .grid {
     .item {
       img {
-        height: 240px;
+        height: var(--oracolo-article-image-height, 240px);
         object-fit: var(--oracolo-article-image-fit, cover);
       }
     }
     &.odd {
       .item:first-child img {
-        height: 360px;
+        height: var(--oracolo-article-image-height-large, 360px);
       }
     }
   }

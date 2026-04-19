@@ -36,6 +36,16 @@ export class EventSource {
     }
   }
 
+  // Mark every configured relay as already-queried so pluck() will only
+  // consume the in-memory #items (preloaded from cache) and never block on
+  // a relay roundtrip. Use this when the cache is authoritative for first
+  // paint — typically after a successful loadCache() preload.
+  markAllRelaysDone(): void {
+    for (const r of this.relays) {
+      this.#done[r] = true;
+    }
+  }
+
   // Eagerly query the relays once and stash results into #items.
   // Lets Blog.svelte race a cache fetch and a relay query in parallel:
   // whichever finishes first populates #items so pluck() never has to wait.

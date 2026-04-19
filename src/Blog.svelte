@@ -57,13 +57,20 @@
       ...tagFilter
     });
 
-    // Race cache and relay prefetch in parallel so first paint happens as
-    // soon as either source returns. Cache normally wins (local fetch),
-    // but if it's slow or missing the relay results are already on the wire.
-    const cachePromise = config.cacheUrl
-      ? loadCache(config.cacheUrl).then((cache) => {
-          if (!cache) return;
-          const since = cache.generated_at;
+    // Cache-first first paint:
+    //  • If a cache-url is configured, fetch it (with a short timeout) and,
+    //    on success, mark every relay as "done" so pluck() consumes only the
+    //    in-memory items and never blocks on a relay roundtrip. The site is
+    //    rendered entirely from cache for the first paint; the nightly cache
+    //    refresh keeps it fresh.
+    //  • If no cache, race relay prefetches against a 2.5s timeout so first
+    //    paint still happens promptly.
+    let cacheHit = false;
+    if (config.cacheUrl) {
+      try {
+        const cacheTimeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), 1500));
+        const cache = await Promise.race([loadCache(config.cacheUrl), cacheTimeout]);
+        if (cache) {
           const kind1: NostrEvent[] = [];
           const kind20: NostrEvent[] = [];
           const kind30023: NostrEvent[] = [];
@@ -72,20 +79,30 @@
             else if (event.kind === 20) kind20.push(event);
             else if (event.kind === 30023) kind30023.push(event);
           }
-          noteSource.preload(kind1, since);
-          imageSource.preload(kind20, since);
-          articleSource.preload(kind30023, since);
-        }).catch((err) => console.warn('cache load failed', err))
-      : Promise.resolve();
+          noteSource.preload(kind1, cache.generated_at);
+          imageSource.preload(kind20, cache.generated_at);
+          articleSource.preload(kind30023, cache.generated_at);
+          noteSource.markAllRelaysDone();
+          imageSource.markAllRelaysDone();
+          articleSource.markAllRelaysDone();
+          cacheHit = true;
+        }
+      } catch (err) {
+        console.warn('cache load failed', err);
+      }
+    }
 
-    const relayPromise = Promise.all([
-      noteSource.prefetch(),
-      imageSource.prefetch(),
-      articleSource.prefetch()
-    ]).catch((err) => console.warn('relay prefetch failed', err));
-
-    const timeout = new Promise((resolve) => setTimeout(resolve, 2500));
-    await Promise.race([cachePromise, relayPromise, timeout]);
+    if (!cacheHit) {
+      const timeout = new Promise((resolve) => setTimeout(resolve, 2500));
+      await Promise.race([
+        Promise.all([
+          noteSource.prefetch(),
+          imageSource.prefetch(),
+          articleSource.prefetch()
+        ]).catch((err) => console.warn('relay prefetch failed', err)),
+        timeout
+      ]);
+    }
 
     blocks = config.blocks;
   });
@@ -119,7 +136,12 @@
 {#if blocks}
   <div
     class:hidden={!$loaded}
-    style={config.articleImageFit ? `--oracolo-article-image-fit: ${config.articleImageFit}` : ''}
+    style={config.articleImageFit
+      ? `--oracolo-article-image-fit: ${config.articleImageFit};` +
+        (config.articleImageFit === 'contain'
+          ? ' --oracolo-article-image-height: auto; --oracolo-article-image-height-large: auto;'
+          : '')
+      : ''}
   >
     {#each blocks as block}
       {#if block.type === 'articles'}
