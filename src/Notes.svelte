@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, tick } from 'svelte';
+  import { onMount, onDestroy, tick } from 'svelte';
   import { type NostrEvent } from '@nostr/tools/core';
   import { Splide, SplideSlide } from '@splidejs/svelte-splide';
   import '@splidejs/svelte-splide/css';
@@ -16,23 +16,48 @@
   export let noMoreEvents = false;
 
   let items: EventData[] = [];
+  const seen = new Set<string>();
+  let unsubAdditions: (() => void) | null = null;
+
   onMount(() => {
     (async () => {
       if (ids) {
         style = 'grid';
         items = await source.fetchIds(ids);
-      } else {
-        items = await source.pluck(count, minChars);
-        const processed = [];
-        if (style === 'board' || style === 'wall') {
-          for (const item of items) {
-            processed.push(await processContent(item));
-          }
-          items = processed;
-        }
+        return;
       }
+      items = await source.pluck(count, minChars);
+      const processed = [];
+      if (style === 'board' || style === 'wall') {
+        for (const item of items) {
+          processed.push(await processContent(item));
+        }
+        items = processed;
+      }
+      for (const e of items) seen.add(e.id);
+
+      unsubAdditions = source.additions.subscribe(async (events) => {
+        if (!events?.length) return;
+        const fresh: EventData[] = [];
+        for (const e of events) {
+          if (seen.has(e.id)) continue;
+          if (!source.passesFilter(e, minChars)) continue;
+          seen.add(e.id);
+          let data = getEventData(e);
+          if (style === 'board' || style === 'wall') {
+            data = await processContent(data);
+          }
+          fresh.push(data);
+        }
+        if (!fresh.length) return;
+        items = [...fresh, ...items]
+          .sort((a, b) => b.created_at - a.created_at)
+          .slice(0, count);
+      });
     })();
   });
+
+  onDestroy(() => unsubAdditions?.());
 
   // Boardlayout logic
   let gridContainer: HTMLDivElement;

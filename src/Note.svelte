@@ -7,6 +7,7 @@
   import { neventEncode } from '@nostr/tools/nip19';
   import 'zapthreads';
   import { type NostrUser } from '@nostr/gadgets/metadata';
+  import { getCache } from './cache';
 
   let replyRelays: string[];
   let note: EventData;
@@ -36,16 +37,36 @@
     nevent = neventEncode({ id });
     comments = config.comments;
 
+    // Cache-first: navigating from the home grid → article view should be
+    // instant since the event is almost always already in the cache file
+    // (memoized in-process, so no second network roundtrip after Blog.svelte
+    // populated it). Fall back to a relay subscription only if the cache
+    // doesn't have this event id.
+    let renderedFromCache = false;
+    if (config.cacheUrl) {
+      try {
+        const cache = await getCache(config.cacheUrl);
+        const cached = cache?.events.find((e) => e.id === id);
+        if (cached) {
+          note = getEventData(cached);
+          documentTitle.set(note.title);
+          renderedContent = await processAll(note);
+          renderedFromCache = true;
+        }
+      } catch (err) {
+        console.warn('cache lookup failed', err);
+      }
+    }
+
+    if (renderedFromCache) return;
+
     pool.subscribeManyEose(config.writeRelays, [{ ids: [id] }], {
       onevent: async (event) => {
-        console.log('Received event:', event);
         note = getEventData(event);
         documentTitle.set(note.title);
         renderedContent = await processAll(note);
       },
-      onclose() {
-        console.log('Finish, subscription closed.');
-      }
+      onclose() {}
     });
   });
 

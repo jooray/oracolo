@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { formatDate, type EventData } from './utils.js';
+  import { onMount, onDestroy } from 'svelte';
+  import { formatDate, getEventData, type EventData } from './utils.js';
   import type { Config } from './config.js';
   import type { EventSource } from './blockUtils.js';
 
@@ -12,16 +12,37 @@
   export let ids: string[] | undefined = undefined;
 
   let items: EventData[] = [];
+  const seen = new Set<string>();
+  let unsubAdditions: (() => void) | null = null;
+
   onMount(() => {
     (async () => {
       if (ids) {
         style = 'grid';
         items = await source.fetchIds(ids);
-      } else {
-        items = await source.pluck(count, minChars);
+        return;
       }
+      items = await source.pluck(count, minChars);
+      for (const e of items) seen.add(e.id);
+
+      unsubAdditions = source.additions.subscribe((events) => {
+        if (!events?.length) return;
+        const fresh: EventData[] = [];
+        for (const e of events) {
+          if (seen.has(e.id)) continue;
+          if (!source.passesFilter(e, minChars)) continue;
+          seen.add(e.id);
+          fresh.push(getEventData(e));
+        }
+        if (!fresh.length) return;
+        items = [...fresh, ...items]
+          .sort((a, b) => b.created_at - a.created_at)
+          .slice(0, count);
+      });
     })();
   });
+
+  onDestroy(() => unsubAdditions?.());
 </script>
 
 {#if items.length > 0}

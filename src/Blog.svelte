@@ -10,7 +10,7 @@
   import Notes from './Notes.svelte';
   import Images from './Images.svelte';
   import { loaded, totalDisplayedNotes, EventSource } from './blockUtils';
-  import { loadCache } from './cache';
+  import { getCache } from './cache';
 
   let npub = '';
   let topics: string[] = [];
@@ -69,7 +69,7 @@
     if (config.cacheUrl) {
       try {
         const cacheTimeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), 1500));
-        const cache = await Promise.race([loadCache(config.cacheUrl), cacheTimeout]);
+        const cache = await Promise.race([getCache(config.cacheUrl), cacheTimeout]);
         if (cache) {
           const kind1: NostrEvent[] = [];
           const kind20: NostrEvent[] = [];
@@ -86,6 +86,12 @@
           imageSource.markAllRelaysDone();
           articleSource.markAllRelaysDone();
           cacheHit = true;
+          // Fire-and-forget background refresh: render immediately from
+          // cache, then merge in any events newer than cache.generated_at
+          // via the EventSource.additions store. Non-blocking.
+          noteSource.refreshSince(cache.generated_at);
+          imageSource.refreshSince(cache.generated_at);
+          articleSource.refreshSince(cache.generated_at);
         }
       } catch (err) {
         console.warn('cache load failed', err);

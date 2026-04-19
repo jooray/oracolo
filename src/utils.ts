@@ -294,48 +294,43 @@ export function shortenUrlsAndIdentifiersAndShrinkTo(
   return next;
 }
 
+// All three of these run BEFORE the markdown converter, so they must NOT
+// consume the surrounding newlines/whitespace — otherwise an embedded media
+// URL on its own line collapses adjacent block elements (e.g. a `### head`
+// after a bare `https://…mp3` line stops being parsed as a heading because
+// the audio URL ate the blank line). We match the URL only and leave any
+// surrounding `\n\n` paragraph separators untouched.
 export function processImageUrls(content: string) {
-  // Regex to match image URLs, excluding those between parentheses
-  const imageUrlRegex = /(?<![(])(https?:\/\/\S+\.(?:png|jpg|jpeg|gif|bmp))(?![\)])/g;
-
-  // Replace the image URL with HTML syntax
-  const markdownText = content.replace(imageUrlRegex, (_, group) => {
-    return ` <img src='${group}' /> `; // Markdown syntax for displaying an image
-  });
-
-  return markdownText;
+  // skip URLs already inside markdown link/image syntax `[...](URL)` / `![...](URL)`
+  const imageUrlRegex = /(?<![(\[])https?:\/\/\S+\.(?:png|jpg|jpeg|gif|bmp|webp)/gi;
+  return content.replace(imageUrlRegex, (url) => `<img src='${url}' />`);
 }
 
 export function processVideoUrls(content: string) {
-  // Regular expression to match the video URL and markdown image-style syntax
-  const videoUrlRegex =
-    /(?:https?:\/\/\S+\.(?:mp4|webm|ogg|mov))|(?:\!\[.*?\]\((https?:\/\/\S+\.(?:mp4|webm|ogg|mov))\))/gi;
-
-  // Replace the video URL with HTML <video> tag
-  const htmlText = content.replace(videoUrlRegex, (match) => {
-    // Extract the URL from either plain URL or markdown-style link
-    const url =
-      match.match(/https?:\/\/\S+\.(?:mp4|webm|ogg|mov)/)?.[0] ||
-      match.match(/\((https?:\/\/\S+\.(?:mp4|webm|ogg|mov))\)/)?.[1];
-
-    if (!url) return match; // Fallback if no URL is found
-
-    return ` <video controls><source src="${url}" type="video/mp4"></video> `;
+  const videoUrlRegex = /(?<![(\[])https?:\/\/\S+\.(?:mp4|webm|ogg|mov)/gi;
+  return content.replace(videoUrlRegex, (url) => {
+    return `<video controls><source src="${url}" type="video/mp4"></video>`;
   });
-
-  return htmlText;
 }
 
 export function processAudioUrls(content: string) {
-  // Regular expression to match the audio URL
-  const audioUrlRegex = /\s*(https?:\/\/\S+\.(?:mp3|wav|ogg|aac|flac|m4a|opus))(\s*|$)/gi;
+  const audioUrlRegex = /(?<![(\[])https?:\/\/\S+\.(?:mp3|wav|ogg|aac|flac|m4a|opus)/gi;
+  return content.replace(audioUrlRegex, (url) => `<audio controls src="${url}"></audio>`);
+}
 
-  // Replace the audio URL with HTML <audio> tag
-  const htmlText = content.replace(audioUrlRegex, (_, group) => {
-    return ` <audio controls src="${group}"></audio> `;
+export function processYouTubeUrls(content: string) {
+  // Match standalone YouTube URLs (watch?v=ID or youtu.be/ID), not those
+  // inside markdown links/images. Preserves any `&list=...` playlist param
+  // by appending it to the embed URL so the player shows playlist controls.
+  const youtubeRegex =
+    /(?<![(\[])https?:\/\/(?:www\.)?(?:youtube\.com\/watch\?v=|youtu\.be\/)([\w-]{11})((?:[?&]\S+)?)/g;
+  return content.replace(youtubeRegex, (_, videoId, params) => {
+    const listMatch = params?.match(/[?&]list=([\w-]+)/);
+    const src = listMatch
+      ? `https://www.youtube.com/embed/${videoId}?list=${listMatch[1]}`
+      : `https://www.youtube.com/embed/${videoId}`;
+    return `<div class="youtube-embed"><iframe src="${src}" allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe></div>`;
   });
-
-  return htmlText;
 }
 
 export function processSmartyPants(content: string) {
@@ -412,6 +407,7 @@ export async function processAll(note: EventData | NostrEvent): Promise<string> 
   noteContent = processImageUrls(noteContent);
   noteContent = processVideoUrls(noteContent);
   noteContent = processAudioUrls(noteContent);
+  noteContent = processYouTubeUrls(noteContent);
 
   // Render returns in kind:1
   if (note.kind == 1) {

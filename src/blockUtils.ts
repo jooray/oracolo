@@ -36,6 +36,11 @@ export class EventSource {
     }
   }
 
+  // Reactive notifier: emits a list of newly-fetched events whenever
+  // refreshSince() finds events the cache didn't have. Each block component
+  // subscribes, dedupes against its own already-rendered set, and merges in.
+  additions = writable<NostrEvent[]>([]);
+
   // Mark every configured relay as already-queried so pluck() will only
   // consume the in-memory #items (preloaded from cache) and never block on
   // a relay roundtrip. Use this when the cache is authoritative for first
@@ -44,6 +49,33 @@ export class EventSource {
     for (const r of this.relays) {
       this.#done[r] = true;
     }
+  }
+
+  // Background relay query for events newer than the cache. Non-blocking:
+  // call without awaiting so first paint happens immediately from cache,
+  // then any newer events stream in via the `additions` store.
+  async refreshSince(sinceTimestamp: number): Promise<void> {
+    if (!this.relays.length) return;
+    try {
+      const fresh = await pool.querySync(this.relays, {
+        ...this.filter,
+        since: sinceTimestamp
+      });
+      if (fresh.length > 0) {
+        this.additions.set(fresh);
+      }
+    } catch (err) {
+      console.warn('background refresh failed', err);
+    }
+  }
+
+  passesFilter(event: NostrEvent, minChars: number): boolean {
+    if (this.#kind === 1 && !isRootNote(event)) return false;
+    if (minChars > 0) {
+      if (event.kind === 30023) return event.content.length >= minChars;
+      return isLengthEqualOrGreaterThanThreshold(event, minChars);
+    }
+    return true;
   }
 
   // Eagerly query the relays once and stash results into #items.

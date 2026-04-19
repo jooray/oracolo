@@ -19,6 +19,19 @@ async function fetchAndDecompress(url: string): Promise<string> {
   return response.text();
 }
 
+// In-process memoization. Both Blog.svelte and Note.svelte ask for the
+// cache; without this, navigating from home → article would re-fetch and
+// re-parse the cache file. With it, the second caller awaits the same
+// promise and gets an instant in-memory hit.
+let cachedPromise: Promise<CacheData | null> | null = null;
+
+export function getCache(cacheUrl: string): Promise<CacheData | null> {
+  if (cachedPromise === null) {
+    cachedPromise = loadCache(cacheUrl);
+  }
+  return cachedPromise;
+}
+
 export async function loadCache(cacheUrl: string): Promise<CacheData | null> {
   // Try .gz first, fall back to plain JSON
   const urls = cacheUrl.endsWith('.gz')
