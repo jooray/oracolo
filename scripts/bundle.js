@@ -64,17 +64,24 @@ while ((match = metaRegex.exec(headContent)) !== null) {
   // Skip standard meta tags (charset, viewport)
   if (/charset/i.test(attrs) || /viewport/i.test(attrs)) continue;
 
-  // Extract name and content/value
-  const nameMatch = attrs.match(/name\s*=\s*["']([^"']*)["']/i);
-  const contentMatch = attrs.match(/content\s*=\s*["']([^"']*)["']/i) ||
-                       attrs.match(/value\s*=\s*["']([^"']*)["']/i);
-  const propertyMatch = attrs.match(/property\s*=\s*["']([^"']*)["']/i);
+  // Match the actual opening quote (\1 backreference) so the value can
+  // contain the *other* quote character — e.g. an apostrophe inside a
+  // double-quoted bio.
+  const nameMatch = attrs.match(/name\s*=\s*(["'])([\s\S]*?)\1/i);
+  const contentMatch = attrs.match(/content\s*=\s*(["'])([\s\S]*?)\1/i) ||
+                       attrs.match(/value\s*=\s*(["'])([\s\S]*?)\1/i);
+  const propertyMatch = attrs.match(/property\s*=\s*(["'])([\s\S]*?)\1/i);
 
   if (nameMatch && contentMatch) {
-    metaTags.push({ type: 'name', key: nameMatch[1], value: contentMatch[1] });
+    metaTags.push({ type: 'name', key: nameMatch[2], value: contentMatch[2] });
   } else if (propertyMatch && contentMatch) {
-    metaTags.push({ type: 'property', key: propertyMatch[1], value: contentMatch[1] });
+    metaTags.push({ type: 'property', key: propertyMatch[2], value: contentMatch[2] });
   }
+}
+
+// Escape a string for safe inclusion in a double-quoted HTML attribute.
+function escapeAttr(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
 }
 
 // Extract html lang attribute
@@ -105,10 +112,12 @@ let output = `<!doctype html>
 
 // Write meta tags
 for (const meta of metaTags) {
+  const key = escapeAttr(meta.key);
+  const value = escapeAttr(meta.value);
   if (meta.type === 'property') {
-    output += `    <meta property="${meta.key}" content="${meta.value}">\n`;
+    output += `    <meta property="${key}" content="${value}">\n`;
   } else {
-    output += `    <meta name="${meta.key}" content="${meta.value}">\n`;
+    output += `    <meta name="${key}" content="${value}">\n`;
   }
 }
 
