@@ -3,10 +3,12 @@
   import { type NostrUser } from '@nostr/gadgets/metadata';
 
   import { getConfig, type SiteConfig } from './config';
-  import { getProfile, downloadHtmlApp } from './utils';
+  import { getProfile, downloadHtmlApp, setLocale } from './utils';
   import Home from './Blog.svelte';
   import Note from './Note.svelte';
   import ThemeSwitch from './ThemeSwitch.svelte';
+  import TopMenu from './TopMenu.svelte';
+  import PromoPopup from './PromoPopup.svelte';
 
   let currentHash = '';
   let profile: NostrUser | null = null;
@@ -29,6 +31,12 @@
           return;
         } else {
           config = configOrUndefined;
+        }
+
+        // Set locale for date formatting
+        if (configOrUndefined.pageLanguage) {
+          setLocale(configOrUndefined.pageLanguage);
+          document.documentElement.lang = configOrUndefined.pageLanguage;
         }
 
         // Destructure with default values to satisfy TypeScript
@@ -90,6 +98,13 @@
     }
   }
 </script>
+
+{#if config}
+  <TopMenu menuItems={config.menuItems} menuLang={config.menuLang} />
+  {#if config.promoUrl}
+    <PromoPopup promoImage={config.promoImage} promoUrl={config.promoUrl} promoText={config.promoText} />
+  {/if}
+{/if}
 
 {#if missingConfig}
   <div class="unfinished-setup">

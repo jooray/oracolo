@@ -19,6 +19,18 @@ var metaSettings = map[string]string{
 	"t":  "topics",
 	"c":  "comments",
 	"ft": "force-theme",
+	"pl": "page-language",
+	"dt": "default-tag",
+	"ar": "auto-redirect-url",
+	"mn": "menu",
+	"ml": "menu-lang",
+	"pi": "promo-image",
+	"pu": "promo-url",
+	"pt": "promo-text",
+	"cu": "cache-url",
+	"oi": "og-image",
+	"ot": "og-title",
+	"od": "og-description",
 }
 
 func paramsFromSubdomain(subdomain string) (Params, error) {

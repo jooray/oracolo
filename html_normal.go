@@ -10,6 +10,34 @@ var start = []byte(`<!doctype html>
   <head>
 `)
 
+var autoRedirectScript = []byte(`
+    <script>
+      (function () {
+        function getMeta(name) {
+          var element = document.querySelector('meta[name="' + name + '"]');
+          return element ? element.getAttribute('content') || '' : '';
+        }
+        var pageLanguage = getMeta('page-language');
+        var redirectUrl = getMeta('auto-redirect-url');
+        var params = new URLSearchParams(window.location.search);
+        var hasExplicitLanguage = params.has('lang');
+        var hasHash = !!window.location.hash && window.location.hash !== '#';
+        if (pageLanguage && !hasExplicitLanguage && !hasHash && redirectUrl) {
+          var browserLanguages = Array.isArray(window.navigator.languages) && window.navigator.languages.length
+            ? window.navigator.languages
+            : [window.navigator.language || ''];
+          var regex = new RegExp('^' + pageLanguage + '(?:-|$)', 'i');
+          var prefersPageLanguage = browserLanguages.some(function (lang) {
+            return regex.test(lang);
+          });
+          if (!prefersPageLanguage) {
+            window.location.replace(redirectUrl);
+          }
+        }
+      })();
+    </script>
+`)
+
 var rest = []byte(`
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -91,6 +119,8 @@ func renderModified(w io.Writer, params Params) {
 	for _, param := range params {
 		fmt.Fprintf(w, "    <meta name=\"%s\" content=\"%s\">\n", param[0], param[1])
 	}
+	writeOGTags(w, params)
+	w.Write(autoRedirectScript)
 	w.Write(rest)
 
 	if s.Development {

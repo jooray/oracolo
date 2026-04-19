@@ -32,3 +32,6 @@ dist-ssr
 *_templ.go
 
 tmp/
+
+# Claude Code local settings
+.claude/

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import type { NostrEvent } from '@nostr/tools/core';
 
   import { type SiteConfig, type Block } from './config';
   import { documentTitle } from './stores/documentTitleStore';
@@ -9,6 +10,7 @@
   import Notes from './Notes.svelte';
   import Images from './Images.svelte';
   import { loaded, totalDisplayedNotes, EventSource } from './blockUtils';
+  import { loadCache } from './cache';
 
   let npub = '';
   let topics: string[] = [];
@@ -26,18 +28,18 @@
     document.title = value;
   });
 
-  onMount(() => {
+  onMount(async () => {
     if (!profile) {
       throw new Error('invalid npub');
     }
     npub = config.npub;
     topics = config.topics;
-    blocks = config.blocks;
 
     documentTitle.set(profile.shortName + ' home, powered by Nostr');
 
-    // fetch only required data
-    const tagFilter = tag ? { '#t': [tag.substring('/tags'.length)] } : {};
+    // fetch only required data — use defaultTag when no explicit tag is set
+    const effectiveTag = tag || (config.defaultTag ? 'tags/' + config.defaultTag : '');
+    const tagFilter = effectiveTag ? { '#t': [effectiveTag.substring('tags/'.length)] } : {};
 
     noteSource = new EventSource(config.writeRelays, {
       kinds: [1],
@@ -54,6 +56,38 @@
       authors: [profile.pubkey],
       ...tagFilter
     });
+
+    // Race cache and relay prefetch in parallel so first paint happens as
+    // soon as either source returns. Cache normally wins (local fetch),
+    // but if it's slow or missing the relay results are already on the wire.
+    const cachePromise = config.cacheUrl
+      ? loadCache(config.cacheUrl).then((cache) => {
+          if (!cache) return;
+          const since = cache.generated_at;
+          const kind1: NostrEvent[] = [];
+          const kind20: NostrEvent[] = [];
+          const kind30023: NostrEvent[] = [];
+          for (const event of cache.events) {
+            if (event.kind === 1) kind1.push(event);
+            else if (event.kind === 20) kind20.push(event);
+            else if (event.kind === 30023) kind30023.push(event);
+          }
+          noteSource.preload(kind1, since);
+          imageSource.preload(kind20, since);
+          articleSource.preload(kind30023, since);
+        }).catch((err) => console.warn('cache load failed', err))
+      : Promise.resolve();
+
+    const relayPromise = Promise.all([
+      noteSource.prefetch(),
+      imageSource.prefetch(),
+      articleSource.prefetch()
+    ]).catch((err) => console.warn('relay prefetch failed', err));
+
+    const timeout = new Promise((resolve) => setTimeout(resolve, 2500));
+    await Promise.race([cachePromise, relayPromise, timeout]);
+
+    blocks = config.blocks;
   });
 </script>
 
@@ -83,7 +117,10 @@
 {/if}
 
 {#if blocks}
-  <div class:hidden={!$loaded}>
+  <div
+    class:hidden={!$loaded}
+    style={config.articleImageFit ? `--oracolo-article-image-fit: ${config.articleImageFit}` : ''}
+  >
     {#each blocks as block}
       {#if block.type === 'articles'}
         <Articles source={articleSource} {...block.config} />

@@ -20,11 +20,42 @@ export class EventSource {
 
   #done: { [relay: string]: boolean } = {};
   #mutex = new Mutex();
+  #sinceOverride: number | null = null;
 
   constructor(relays: string[], filter: Filter) {
     this.relays = relays;
     this.filter = filter;
     this.#kind = filter.kinds?.[0] || 1;
+  }
+
+  preload(events: NostrEvent[], sinceTimestamp?: number) {
+    this.#items.push(...events);
+    this.#items.sort((a, b) => a.created_at - b.created_at);
+    if (sinceTimestamp !== undefined) {
+      this.#sinceOverride = sinceTimestamp;
+    }
+  }
+
+  // Eagerly query the relays once and stash results into #items.
+  // Lets Blog.svelte race a cache fetch and a relay query in parallel:
+  // whichever finishes first populates #items so pluck() never has to wait.
+  // The relays we hit here are marked done so pluck() won't re-query them.
+  async prefetch(limit = 100): Promise<void> {
+    const relays = this.relays.slice(0, 3);
+    if (relays.length === 0) return;
+    try {
+      const downloaded = await pool.querySync(relays, {
+        ...this.filter,
+        until: this.#until,
+        limit
+      });
+      this.#items.push(...downloaded);
+      this.#items.sort((a, b) => a.created_at - b.created_at);
+    } finally {
+      relays.forEach((r) => {
+        this.#done[r] = true;
+      });
+    }
   }
 
   async pluck(count: number, minChars: number): Promise<EventData[]> {
@@ -43,6 +74,7 @@ export class EventSource {
           let downloaded = await pool.querySync(relays, {
             ...this.filter,
             until: this.#until,
+            ...(this.#sinceOverride ? { since: this.#sinceOverride } : {}),
             limit: Math.floor(
               count *
                 (minChars > (this.#kind === 1 ? 20 : 200)

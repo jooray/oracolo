@@ -107,6 +107,14 @@ pre {
     font-size: 3rem;
   }
 
+  // When a TopMenu is configured the floating menu sits at top:0.75rem on
+  // mobile and would overlap the H1; reserve room for it.
+  @media (max-width: 720px) {
+    body:has(.oracolo-menu) &.home {
+      padding-top: 4rem;
+    }
+  }
+
   .external-link {
     text-align: right;
     margin-top: -1rem;
@@ -399,6 +407,7 @@ html.dark .separator {
     .item {
       img {
         height: 240px;
+        object-fit: var(--oracolo-article-image-fit, cover);
       }
     }
     &.odd {

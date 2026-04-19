@@ -73,6 +73,8 @@ func renderModifiedBundled(w io.Writer, params Params) {
 	for _, param := range params {
 		fmt.Fprintf(w, "    <meta name=\"%s\" content=\"%s\">\n", param[0], param[1])
 	}
+	writeOGTags(w, params)
+	w.Write(autoRedirectScript)
 	w.Write(bundledStep3)
 	w.Write(js)
 	w.Write(bundledStep5)

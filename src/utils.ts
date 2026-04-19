@@ -28,7 +28,18 @@ export type EventData = {
   renderedContent: string;
 };
 
-const dateFormatter = new Intl.DateTimeFormat('en-US', {
+let currentLocale = 'en-US';
+
+export function setLocale(locale: string) {
+  currentLocale = locale || 'en-US';
+  dateFormatter = new Intl.DateTimeFormat(currentLocale, {
+    day: '2-digit',
+    month: 'long',
+    year: 'numeric'
+  });
+}
+
+let dateFormatter = new Intl.DateTimeFormat(currentLocale, {
   day: '2-digit',
   month: 'long',
   year: 'numeric'
@@ -432,13 +443,12 @@ export async function processAll(note: EventData | NostrEvent): Promise<string> 
 export function formatDate(timestamp: number, includeTime = false) {
   const date = new Date(timestamp * 1000);
 
-  // Set date options
   const dateOptions: Intl.DateTimeFormatOptions = {
     day: '2-digit',
     month: 'long',
     year: 'numeric'
   };
-  const dateParts = new Intl.DateTimeFormat('en-US', dateOptions).formatToParts(date);
+  const dateParts = new Intl.DateTimeFormat(currentLocale, dateOptions).formatToParts(date);
 
   let day, month, year;
   dateParts.forEach((part) => {
@@ -449,14 +459,13 @@ export function formatDate(timestamp: number, includeTime = false) {
 
   let formattedDate = `${day} ${month} ${year}`;
 
-  // If includeTime is true, add the time in 24-hour format
   if (includeTime) {
     const timeOptions: Intl.DateTimeFormatOptions = {
       hour: '2-digit',
       minute: '2-digit',
       hourCycle: 'h23'
     };
-    const timeFormatter = new Intl.DateTimeFormat('en-US', timeOptions);
+    const timeFormatter = new Intl.DateTimeFormat(currentLocale, timeOptions);
     const timeString = timeFormatter.format(date);
     formattedDate += ` - ${timeString}`;
   }

@@ -8,6 +8,16 @@ export type SiteConfig = {
   topics: string[];
   comments: boolean;
   blocks: Block[];
+  pageLanguage: string;
+  defaultTag: string;
+  autoRedirectUrl: string;
+  menuItems: { label: string; url: string }[];
+  menuLang: { label: string; url: string } | null;
+  promoImage: string;
+  promoUrl: string;
+  promoText: string;
+  cacheUrl: string;
+  articleImageFit: 'cover' | 'contain' | '';
 };
 
 export type Block = {
@@ -27,6 +37,16 @@ export async function getConfig(): Promise<SiteConfig> {
   const relaysMeta = document.querySelector('meta[name="relays"]');
   const topicsMeta = document.querySelector('meta[name="topics"]');
   const commentsMeta = document.querySelector('meta[name="comments"]');
+  const pageLanguageMeta = document.querySelector('meta[name="page-language"]');
+  const defaultTagMeta = document.querySelector('meta[name="default-tag"]');
+  const autoRedirectUrlMeta = document.querySelector('meta[name="auto-redirect-url"]');
+  const menuMeta = document.querySelector('meta[name="menu"]');
+  const menuLangMeta = document.querySelector('meta[name="menu-lang"]');
+  const promoImageMeta = document.querySelector('meta[name="promo-image"]');
+  const promoUrlMeta = document.querySelector('meta[name="promo-url"]');
+  const promoTextMeta = document.querySelector('meta[name="promo-text"]');
+  const cacheUrlMeta = document.querySelector('meta[name="cache-url"]');
+  const articleImageFitMeta = document.querySelector('meta[name="article-image-fit"]');
 
   // Author
   // -------------------------------------------------------
@@ -136,12 +156,58 @@ export async function getConfig(): Promise<SiteConfig> {
     blocks.push({ type: 'articles', config: { count: 30, style: 'list', minChars: 0 } });
   }
 
+  // Language
+  const pageLanguage = pageLanguageMeta?.getAttribute?.('content') || '';
+  const defaultTag = defaultTagMeta?.getAttribute?.('content') || '';
+  const autoRedirectUrl = autoRedirectUrlMeta?.getAttribute?.('content') || '';
+
+  // Menu
+  const menuRaw = menuMeta?.getAttribute?.('content') || '';
+  const menuItems = menuRaw
+    ? menuRaw.split(',').map((item) => {
+        const [label, url] = item.split('|').map((s) => s.trim());
+        return { label: label || '', url: url || '' };
+      }).filter((item) => item.label && item.url)
+    : [];
+
+  const menuLangRaw = menuLangMeta?.getAttribute?.('content') || '';
+  const menuLang = menuLangRaw
+    ? (() => {
+        const [label, url] = menuLangRaw.split('|').map((s) => s.trim());
+        return label && url ? { label, url } : null;
+      })()
+    : null;
+
+  // Promo
+  const promoImage = promoImageMeta?.getAttribute?.('content') || '';
+  const promoUrl = promoUrlMeta?.getAttribute?.('content') || '';
+  const promoText = promoTextMeta?.getAttribute?.('content') || '';
+
+  // Cache
+  const cacheUrl = cacheUrlMeta?.getAttribute?.('content') || '';
+
+  // Article cover-image fit: 'cover' (default) or 'contain'.
+  // 'contain' is for sites with square cover-art that should not be cropped.
+  const articleImageFitRaw = (articleImageFitMeta?.getAttribute?.('content') || '').trim().toLowerCase();
+  const articleImageFit: 'cover' | 'contain' | '' =
+    articleImageFitRaw === 'cover' || articleImageFitRaw === 'contain' ? articleImageFitRaw : '';
+
   return {
     npub,
     readRelays,
     writeRelays,
     topics,
     comments,
-    blocks
+    blocks,
+    pageLanguage,
+    defaultTag,
+    autoRedirectUrl,
+    menuItems,
+    menuLang,
+    promoImage,
+    promoUrl,
+    promoText,
+    cacheUrl,
+    articleImageFit
   };
 }
