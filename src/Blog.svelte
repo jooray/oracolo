@@ -126,6 +126,9 @@
       </div>
       {profile?.shortName}
     </h1>
+    {#if config.bio || profile?.metadata?.about}
+      <p class="about">{config.bio || profile?.metadata?.about}</p>
+    {/if}
   </div>
 {/if}
 

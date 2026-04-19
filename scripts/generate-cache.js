@@ -86,7 +86,9 @@ if (defaultTag) console.log(`Default tag: ${defaultTag}`);
 const pool = new SimplePool();
 
 async function fetchEvents() {
-  const kinds = [1, 20, 30023];
+  // kind 0 = profile metadata (used to render the bio without a relay
+  // roundtrip on first paint).
+  const kinds = [0, 1, 20, 30023];
   const allEvents = [];
 
   for (const kind of kinds) {
@@ -96,7 +98,8 @@ async function fetchEvents() {
       authors: [pubkeyHex],
       limit: 500
     };
-    if (defaultTag) {
+    // Profile metadata is not topic-tagged; only narrow content kinds.
+    if (defaultTag && kind !== 0) {
       filter['#t'] = [defaultTag];
     }
 

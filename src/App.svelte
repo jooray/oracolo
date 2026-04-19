@@ -1,9 +1,10 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { type NostrUser } from '@nostr/gadgets/metadata';
+  import { nostrUserFromEvent, type NostrUser } from '@nostr/gadgets/metadata';
 
   import { getConfig, type SiteConfig } from './config';
   import { getProfile, downloadHtmlApp, setLocale } from './utils';
+  import { getCache } from './cache';
   import Home from './Blog.svelte';
   import Note from './Note.svelte';
   import ThemeSwitch from './ThemeSwitch.svelte';
@@ -67,17 +68,47 @@
         handleHashChange();
         window.addEventListener('hashchange', handleHashChange);
 
-        profile = await getProfile(npub);
-        if (profile) {
-          name = profile.metadata.name || profile.shortName;
-          picture = profile.image || null;
+        // Cache-first profile: a kind-0 event is included in
+        // events-cache.json; constructing the NostrUser from it lets the
+        // header render immediately without waiting on a relay.
+        if (configOrUndefined.cacheUrl) {
+          try {
+            const cache = await getCache(configOrUndefined.cacheUrl);
+            const k0 = cache?.events.find((e) => e.kind === 0);
+            if (k0) {
+              profile = nostrUserFromEvent(k0);
+              name = profile.metadata.name || profile.shortName;
+              picture = profile.image || null;
+            }
+          } catch (err) {
+            console.warn('cache profile load failed', err);
+          }
+        }
 
-          if (shouldDownload) {
-            downloadHtmlApp();
+        if (!profile) {
+          profile = await getProfile(npub);
+          if (profile) {
+            name = profile.metadata.name || profile.shortName;
+            picture = profile.image || null;
+          } else {
+            missingConfig = true;
+            return;
           }
         } else {
-          missingConfig = true;
-          return;
+          // Background refresh in case the cached profile is stale.
+          getProfile(npub)
+            .then((fresh) => {
+              if (fresh) {
+                profile = fresh;
+                name = fresh.metadata.name || fresh.shortName;
+                picture = fresh.image || null;
+              }
+            })
+            .catch(() => {});
+        }
+
+        if (shouldDownload) {
+          downloadHtmlApp();
         }
       })
       .catch((error) => {

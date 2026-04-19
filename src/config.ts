@@ -18,6 +18,7 @@ export type SiteConfig = {
   promoText: string;
   cacheUrl: string;
   articleImageFit: 'cover' | 'contain' | '';
+  bio: string;
 };
 
 export type Block = {
@@ -47,6 +48,7 @@ export async function getConfig(): Promise<SiteConfig> {
   const promoTextMeta = document.querySelector('meta[name="promo-text"]');
   const cacheUrlMeta = document.querySelector('meta[name="cache-url"]');
   const articleImageFitMeta = document.querySelector('meta[name="article-image-fit"]');
+  const bioMeta = document.querySelector('meta[name="bio"]');
 
   // Author
   // -------------------------------------------------------
@@ -192,6 +194,10 @@ export async function getConfig(): Promise<SiteConfig> {
   const articleImageFit: 'cover' | 'contain' | '' =
     articleImageFitRaw === 'cover' || articleImageFitRaw === 'contain' ? articleImageFitRaw : '';
 
+  // Optional override for the homepage bio. If empty, the bio is taken
+  // from the author's kind-0 metadata (`about` field) at render time.
+  const bio = bioMeta?.getAttribute?.('content') || '';
+
   return {
     npub,
     readRelays,
@@ -208,6 +214,7 @@ export async function getConfig(): Promise<SiteConfig> {
     promoUrl,
     promoText,
     cacheUrl,
-    articleImageFit
+    articleImageFit,
+    bio
   };
 }
