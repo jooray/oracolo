@@ -115,13 +115,27 @@ async function fetchEvents() {
 try {
   const events = await fetchEvents();
 
-  // Deduplicate by event ID
-  const seen = new Set();
-  const uniqueEvents = events.filter((e) => {
-    if (seen.has(e.id)) return false;
-    seen.add(e.id);
-    return true;
-  });
+  // Deduplicate. For replaceable + parameterized-replaceable events
+  // (NIP-01 / NIP-33) the relays may still hold older versions; keep
+  // only the newest by created_at per (kind, pubkey[, d-tag]). Other
+  // kinds dedupe by id.
+  function replKey(e) {
+    if (e.kind >= 30000 && e.kind < 40000) {
+      const d = e.tags.find((t) => t[0] === 'd')?.[1] || '';
+      return `${e.kind}:${e.pubkey}:${d}`;
+    }
+    if (e.kind === 0 || e.kind === 3 || (e.kind >= 10000 && e.kind < 20000)) {
+      return `${e.kind}:${e.pubkey}`;
+    }
+    return e.id;
+  }
+  const latest = new Map();
+  for (const e of events) {
+    const k = replKey(e);
+    const existing = latest.get(k);
+    if (!existing || e.created_at > existing.created_at) latest.set(k, e);
+  }
+  const uniqueEvents = Array.from(latest.values());
 
   const cacheData = {
     generated_at: Math.round(Date.now() / 1000),

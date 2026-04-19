@@ -4,7 +4,7 @@ import * as nip27 from '@nostr/tools/nip27';
 import { pool } from '@nostr/gadgets/global';
 import { Mutex } from '@livekit/mutex';
 
-import { getEventData, isRootNote, type EventData } from './utils';
+import { getEventData, isRootNote, dedupeReplaceable, replaceableKey, type EventData } from './utils';
 import { writable } from 'svelte/store';
 
 export const loaded = writable(false);
@@ -30,6 +30,7 @@ export class EventSource {
 
   preload(events: NostrEvent[], sinceTimestamp?: number) {
     this.#items.push(...events);
+    this.#items = dedupeReplaceable(this.#items);
     this.#items.sort((a, b) => a.created_at - b.created_at);
     if (sinceTimestamp !== undefined) {
       this.#sinceOverride = sinceTimestamp;
@@ -78,6 +79,42 @@ export class EventSource {
     return true;
   }
 
+  // Merge background-fetched events into a component's current item list,
+  // deduping by id and by replaceable identity. A new version of a
+  // parameterized-replaceable event (same kind+pubkey+`d` tag, higher
+  // created_at) replaces the older one in-place.
+  mergeAdditions(
+    current: EventData[],
+    events: NostrEvent[],
+    minChars: number,
+    count: number,
+    seen: Set<string>
+  ): EventData[] {
+    const existingByKey = new Map<string, EventData>();
+    for (const it of current) existingByKey.set(it.replKey, it);
+
+    const fresh: EventData[] = [];
+    const replacedKeys = new Set<string>();
+    for (const e of events) {
+      if (seen.has(e.id)) continue;
+      if (!this.passesFilter(e, minChars)) continue;
+      const key = replaceableKey(e);
+      const existing = existingByKey.get(key);
+      if (existing && existing.created_at >= e.created_at) {
+        seen.add(e.id);
+        continue;
+      }
+      seen.add(e.id);
+      fresh.push(getEventData(e));
+      replacedKeys.add(key);
+    }
+    if (!fresh.length) return current;
+    const filtered = current.filter((it) => !replacedKeys.has(it.replKey));
+    return [...fresh, ...filtered]
+      .sort((a, b) => b.created_at - a.created_at)
+      .slice(0, count);
+  }
+
   // Eagerly query the relays once and stash results into #items.
   // Lets Blog.svelte race a cache fetch and a relay query in parallel:
   // whichever finishes first populates #items so pluck() never has to wait.
@@ -92,6 +129,7 @@ export class EventSource {
         limit
       });
       this.#items.push(...downloaded);
+      this.#items = dedupeReplaceable(this.#items);
       this.#items.sort((a, b) => a.created_at - b.created_at);
     } finally {
       relays.forEach((r) => {
@@ -136,6 +174,7 @@ export class EventSource {
             }
 
             events.push(...downloaded);
+            events = dedupeReplaceable(events);
             events.sort((a, b) => a.created_at - b.created_at);
 
             this.#until = events[0]?.created_at - 1;

@@ -26,7 +26,40 @@ export type EventData = {
   images: string[] | [];
   content: string;
   renderedContent: string;
+  // Identity for replaceable / parameterized-replaceable events. For non-
+  // replaceable events this is the event id, so dedupe-by-replKey is also
+  // a correct dedupe-by-id.
+  replKey: string;
 };
+
+// Stable identity for replaceable + parameterized-replaceable events
+// (NIP-01 / NIP-33). For non-replaceable events returns the event id, so
+// callers can use this as a single dedupe key regardless of kind.
+export function replaceableKey(event: NostrEvent): string {
+  const k = event.kind;
+  if (k >= 30000 && k < 40000) {
+    const d = event.tags.find((t) => t[0] === 'd')?.[1] || '';
+    return `${k}:${event.pubkey}:${d}`;
+  }
+  if (k === 0 || k === 3 || (k >= 10000 && k < 20000)) {
+    return `${k}:${event.pubkey}`;
+  }
+  return event.id;
+}
+
+// Keep only the newest version (by created_at) of each replaceable event.
+// Non-replaceable events are deduped by id.
+export function dedupeReplaceable(events: NostrEvent[]): NostrEvent[] {
+  const map = new Map<string, NostrEvent>();
+  for (const e of events) {
+    const k = replaceableKey(e);
+    const existing = map.get(k);
+    if (!existing || e.created_at > existing.created_at) {
+      map.set(k, e);
+    }
+  }
+  return Array.from(map.values());
+}
 
 let currentLocale = 'en-US';
 
@@ -104,7 +137,8 @@ export function getEventData(event: NostrEvent): EventData {
     image: extractedImage,
     images: extractedImages,
     summary: extractedSummary,
-    content: event.content
+    content: event.content,
+    replKey: replaceableKey(event)
   };
 }
 

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { formatDate, getEventData, type EventData } from './utils.js';
+  import { formatDate, type EventData } from './utils.js';
   import type { Config } from './config.js';
   import type { EventSource } from './blockUtils.js';
 
@@ -27,17 +27,7 @@
 
       unsubAdditions = source.additions.subscribe((events) => {
         if (!events?.length) return;
-        const fresh: EventData[] = [];
-        for (const e of events) {
-          if (seen.has(e.id)) continue;
-          if (!source.passesFilter(e, minChars)) continue;
-          seen.add(e.id);
-          fresh.push(getEventData(e));
-        }
-        if (!fresh.length) return;
-        items = [...fresh, ...items]
-          .sort((a, b) => b.created_at - a.created_at)
-          .slice(0, count);
+        items = source.mergeAdditions(items, events, minChars, count, seen);
       });
     })();
   });

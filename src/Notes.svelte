@@ -1,9 +1,8 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from 'svelte';
-  import { type NostrEvent } from '@nostr/tools/core';
   import { Splide, SplideSlide } from '@splidejs/svelte-splide';
   import '@splidejs/svelte-splide/css';
-  import { formatDate, getEventData, processContent, type EventData } from './utils.js';
+  import { formatDate, processContent, type EventData } from './utils.js';
   import type { Config } from './config.js';
   import { EventSource } from './blockUtils.js';
 
@@ -38,21 +37,13 @@
 
       unsubAdditions = source.additions.subscribe(async (events) => {
         if (!events?.length) return;
-        const fresh: EventData[] = [];
-        for (const e of events) {
-          if (seen.has(e.id)) continue;
-          if (!source.passesFilter(e, minChars)) continue;
-          seen.add(e.id);
-          let data = getEventData(e);
-          if (style === 'board' || style === 'wall') {
-            data = await processContent(data);
+        const merged = source.mergeAdditions(items, events, minChars, count, seen);
+        if (style === 'board' || style === 'wall') {
+          for (const it of merged) {
+            if (!it.renderedContent) await processContent(it);
           }
-          fresh.push(data);
         }
-        if (!fresh.length) return;
-        items = [...fresh, ...items]
-          .sort((a, b) => b.created_at - a.created_at)
-          .slice(0, count);
+        items = merged;
       });
     })();
   });
