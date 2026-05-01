@@ -136,11 +136,28 @@ unrelated topics and the site should be a slice.
 ## Auto-redirect
 
 ```html
-<meta name="auto-redirect-url" content="https://other-site.example">
+<meta name="page-language" content="sk">
+<meta name="auto-redirect-url" content="index-en.html?lang=en">
 ```
 
-Renders a small landing page that redirects after a short delay. Set
-when retiring a domain.
+When `page-language` doesn't match the visitor's browser language(s),
+the inline head script redirects to `auto-redirect-url`. Used for
+multilingual sites where each language is its own bundled HTML and
+visitors should land on the version matching their browser.
+
+The redirect is suppressed when the URL already carries a `?lang=`
+parameter or a `#hash` (so deep links and explicit choices are kept),
+and the explicit `?lang=` value is persisted to `localStorage`
+(`oracolo-lang`). On a clean URL the stored value wins over browser
+detection: a visitor whose browser is English but who clicked the SK
+switcher last time stays on SK on the next visit. Clearing site
+storage resets the choice back to browser detection.
+
+The localStorage override also kicks in on pages without
+`auto-redirect-url`: if `menu-lang` points at a URL with a `?lang=X`
+matching the stored preference, the script redirects there. So the
+default-language page (e.g. an English `index-en.html` without
+`auto-redirect-url`) still honors a previously-clicked SK.
 
 ## YouTube embeds
 

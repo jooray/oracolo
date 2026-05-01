@@ -17,22 +17,53 @@ var autoRedirectScript = []byte(`
           var element = document.querySelector('meta[name="' + name + '"]');
           return element ? element.getAttribute('content') || '' : '';
         }
+        function langMatches(stored, target) {
+          if (!stored || !target) return false;
+          return new RegExp('^' + stored + '(?:-|$)', 'i').test(target);
+        }
+        function parseLang(url) {
+          var m = (url || '').match(/[?&]lang=([^&#]+)/);
+          return m ? decodeURIComponent(m[1]) : '';
+        }
+        var STORAGE_KEY = 'oracolo-lang';
         var pageLanguage = getMeta('page-language');
         var redirectUrl = getMeta('auto-redirect-url');
+        var menuLangRaw = getMeta('menu-lang');
+        var menuLangUrl = menuLangRaw ? (menuLangRaw.split('|')[1] || '').trim() : '';
         var params = new URLSearchParams(window.location.search);
-        var hasExplicitLanguage = params.has('lang');
+        var explicitLang = params.get('lang');
         var hasHash = !!window.location.hash && window.location.hash !== '#';
-        if (pageLanguage && !hasExplicitLanguage && !hasHash && redirectUrl) {
-          var browserLanguages = Array.isArray(window.navigator.languages) && window.navigator.languages.length
-            ? window.navigator.languages
-            : [window.navigator.language || ''];
-          var regex = new RegExp('^' + pageLanguage + '(?:-|$)', 'i');
-          var prefersPageLanguage = browserLanguages.some(function (lang) {
-            return regex.test(lang);
-          });
-          if (!prefersPageLanguage) {
-            window.location.replace(redirectUrl);
+        // Persist explicit ?lang=X choice so future visits without it honor the user's selection.
+        if (explicitLang) {
+          try { localStorage.setItem(STORAGE_KEY, explicitLang); } catch (e) {}
+        }
+        if (!pageLanguage || explicitLang || hasHash) return;
+
+        var stored = null;
+        try { stored = localStorage.getItem(STORAGE_KEY); } catch (e) {}
+        if (stored) {
+          // Stored preference matches this page; stay regardless of browser language.
+          if (langMatches(stored, pageLanguage)) return;
+          // Stored preference matches an alternate-language URL we know about; honor it.
+          var alt = redirectUrl || menuLangUrl;
+          if (alt && langMatches(stored, parseLang(alt))) {
+            window.location.replace(alt);
+            return;
           }
+          // Stored value doesn't match either side; fall through to browser detection.
+        }
+
+        // Browser-language fallback only fires when auto-redirect-url is set
+        // (menu-lang alone is treated as a manual switcher, not an auto-redirect).
+        if (!redirectUrl) return;
+        var browserLanguages = Array.isArray(window.navigator.languages) && window.navigator.languages.length
+          ? window.navigator.languages
+          : [window.navigator.language || ''];
+        var prefersPageLanguage = browserLanguages.some(function (lang) {
+          return langMatches(pageLanguage, lang);
+        });
+        if (!prefersPageLanguage) {
+          window.location.replace(redirectUrl);
         }
       })();
     </script>
