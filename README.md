@@ -2,6 +2,9 @@
 
 ## A Nostr blog in a single html file + A dynamic blog service
 
+> **Note:** This is a fork (`jooray/oracolo`) of the upstream [`dtonon/oracolo`](https://github.com/dtonon/oracolo) project. It adds a set of opt-in features — a local cache for instant first paint, a homepage bio, a top/language menu, YouTube embeds, a CLI bundler that needs no Go server, Open Graph cards, and more. Everything is opt-in via `<meta>` tags, so sites that don't set them behave exactly like upstream. See [FORK.md](FORK.md) for the full list and usage.
+
+
 Oracolo is a minimalist blog powered by [Nostr](https://njump.me), that consists of a single html file, weighing only ~500Kb.
 You can use whatever Nostr client that supports long format ([habla.news](https://habla.news), [yakihonne](https://yakihonne.com), [highlighter.com](https://highlighter.com), etc) to write your articles and your personal blog is automatically updated. You can also post notes and images!
 
