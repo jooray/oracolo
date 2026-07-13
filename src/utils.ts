@@ -17,6 +17,7 @@ export function isRootNote(event: NostrEvent) {
 
 export type EventData = {
   id: string;
+  pubkey: string;
   kind: number;
   created_at: number;
   title: string;
@@ -30,7 +31,67 @@ export type EventData = {
   // replaceable events this is the event id, so dedupe-by-replKey is also
   // a correct dedupe-by-id.
   replKey: string;
+  // The `d` tag of a parameterized-replaceable event (NIP-33), e.g. the
+  // slug of a long-form article. Undefined for non-addressable events.
+  identifier: string | undefined;
 };
+
+export type PermalinkMode = 'slug' | 'naddr' | 'id';
+
+// Build the URL hash (without the leading `#`) that links to an event.
+//
+// Long-form articles (kind 30023) are *addressable* events: their identity is
+// `kind:pubkey:d-tag`, which is stable across edits, whereas the event id
+// changes on every edit. So we link them by their permanent identifier — by
+// default the human-readable `d`-tag slug, optionally the self-contained
+// `naddr`. Non-addressable events (notes, images) keep their immutable id.
+export function permalinkHash(
+  event: Pick<EventData, 'kind' | 'id' | 'pubkey' | 'identifier'>,
+  mode: PermalinkMode = 'slug',
+  relays: string[] = []
+): string {
+  if (event.kind !== 30023 || !event.identifier || mode === 'id') {
+    return event.id;
+  }
+  if (mode === 'naddr') {
+    return nip19.naddrEncode({
+      identifier: event.identifier,
+      pubkey: event.pubkey,
+      kind: event.kind,
+      relays: relays.slice(0, 2)
+    });
+  }
+  // 'slug': the `d` tag, percent-encoded so slugs with spaces/slashes/unicode
+  // survive the round-trip through window.location.hash.
+  return encodeURIComponent(event.identifier);
+}
+
+// Resolve a URL hash back into what to fetch. Accepts, in order:
+//   • an naddr / nevent / note NIP-19 code (e.g. shared from njump),
+//   • a 64-char hex event id (notes, images, legacy article links),
+//   • anything else → an article `d`-tag slug for the given author.
+export type ResolvedTarget =
+  | { type: 'id'; id: string }
+  | { type: 'addr'; kind: number; pubkey: string; identifier: string };
+
+export function resolvePermalink(hash: string, authorPubkey: string): ResolvedTarget {
+  try {
+    const decoded = nip19.decode(hash);
+    if (decoded.type === 'naddr') {
+      const p = decoded.data;
+      return { type: 'addr', kind: p.kind, pubkey: p.pubkey, identifier: p.identifier };
+    }
+    if (decoded.type === 'nevent') return { type: 'id', id: decoded.data.id };
+    if (decoded.type === 'note') return { type: 'id', id: decoded.data };
+  } catch {
+    // not a NIP-19 code — fall through
+  }
+  if (/^[0-9a-f]{64}$/.test(hash)) {
+    return { type: 'id', id: hash };
+  }
+  // Treat as an article slug (the `d` tag) authored by this blog's author.
+  return { type: 'addr', kind: 30023, pubkey: authorPubkey, identifier: hash };
+}
 
 // Stable identity for replaceable + parameterized-replaceable events
 // (NIP-01 / NIP-33). For non-replaceable events returns the event id, so
@@ -130,6 +191,7 @@ export function getEventData(event: NostrEvent): EventData {
 
   return {
     id: event.id,
+    pubkey: event.pubkey,
     kind: event.kind,
     created_at: event.created_at,
     title: extractedTitle,
@@ -138,7 +200,12 @@ export function getEventData(event: NostrEvent): EventData {
     images: extractedImages,
     summary: extractedSummary,
     content: event.content,
-    replKey: replaceableKey(event)
+    renderedContent: '',
+    replKey: replaceableKey(event),
+    identifier:
+      event.kind >= 30000 && event.kind < 40000
+        ? event.tags.find(([k]) => k === 'd')?.[1] || ''
+        : undefined
   };
 }
 

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { formatDate, type EventData } from './utils.js';
+  import { formatDate, permalinkHash, type EventData, type PermalinkMode } from './utils.js';
   import type { Config } from './config.js';
   import type { EventSource } from './blockUtils.js';
 
@@ -10,6 +10,13 @@
   export let style: Config['style'];
   export let minChars: Config['minChars'];
   export let ids: string[] | undefined = undefined;
+
+  // Permalink strategy for article (kind 30023) links. Defaults keep links
+  // stable across article edits by pointing at the permanent `d`-tag slug.
+  export let permalinks: PermalinkMode = 'slug';
+  export let permalinkRelays: string[] = [];
+
+  const hashFor = (event: EventData) => permalinkHash(event, permalinks, permalinkRelays);
 
   let items: EventData[] = [];
   const seen = new Set<string>();
@@ -41,7 +48,7 @@
       <div class="grid {items.length % 2 !== 0 ? 'odd' : ''}">
         {#each items as event}
           <div class="item">
-            <a href={`#${event.id}`}>
+            <a href={`#${hashFor(event)}`}>
               <!-- svelte-ignore a11y-missing-attribute -->
               {#if event.image}
                 <img src={event.image} />
@@ -66,7 +73,7 @@
         <ul>
           {#each items as event}
             <li>
-              <a href={`#${event.id}`}>
+              <a href={`#${hashFor(event)}`}>
                 <h2>{event.title}</h2>
                 {#if event.summary}
                   <div class="summary">{event.summary}</div>

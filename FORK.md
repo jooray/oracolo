@@ -18,6 +18,7 @@ behave exactly like upstream.
 - [Auto-redirect](#auto-redirect)
 - [YouTube embeds](#youtube-embeds)
 - [Latest-version-only for replaceable events](#latest-version-only-for-replaceable-events)
+- [Permanent article links that survive edits](#permanent-article-links-that-survive-edits)
 - [CLI bundler (no Go server required)](#cli-bundler-no-go-server-required)
 - [Migration: republish kind-1 as kind-30023](#migration-republish-kind-1-as-kind-30023)
 - [Open Graph / Twitter cards for social link previews](#open-graph--twitter-cards-for-social-link-previews)
@@ -180,6 +181,35 @@ for plain replaceable), keeping the highest `created_at`. Applied at:
 
 So if a relay still holds an older version of a kind-30023 article you
 republished, the site shows only the latest.
+
+## Permanent article links that survive edits
+
+`<meta name="permalinks" content="slug">`  *(default — no meta tag needed)*
+
+Long-form posts (kind 30023) are **replaceable**: every edit produces a new
+event **id**, but the addressable identity `kind:pubkey:d-tag` stays constant.
+Upstream Oracolo links articles by event id (`#<hex>`), so a shared or
+bookmarked link **breaks the moment you edit the article** (relays drop the old
+version). This fork links articles by their permanent `d`-tag instead, so the
+URL in your address bar *is* the permanent link — copy it and it keeps working
+across future edits.
+
+| `permalinks` value | Article link looks like | Notes |
+| --- | --- | --- |
+| `slug` *(default)* | `#my-article-d-tag` | Human-readable, edit-stable. Best for copy-paste. |
+| `naddr` | `#naddr1…` | Self-contained NIP-19 code (kind+pubkey+identifier+relays); good for interop. |
+| `id` | `#<hex-event-id>` | Legacy upstream behaviour — **breaks on edit**. |
+
+Regardless of the setting, the article view still **accepts** all three forms
+on the way in (`naddr`/`nevent`/`note` codes, a raw 64-char event id, or a
+`d`-tag slug), so old event-id links and links shared from njump keep working.
+
+Notes (kind 1) and images (kind 20) are not replaceable, so they always link by
+their immutable event id.
+
+Comments (zapthreads) on an article are anchored to its `naddr`, so a
+discussion stays attached to the article across edits instead of resetting when
+the underlying event id changes.
 
 ## CLI bundler (no Go server required)
 

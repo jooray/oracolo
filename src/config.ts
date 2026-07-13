@@ -19,6 +19,7 @@ export type SiteConfig = {
   cacheUrl: string;
   articleImageFit: 'cover' | 'contain' | '';
   bio: string;
+  permalinks: 'slug' | 'naddr' | 'id';
 };
 
 export type Block = {
@@ -49,6 +50,7 @@ export async function getConfig(): Promise<SiteConfig> {
   const cacheUrlMeta = document.querySelector('meta[name="cache-url"]');
   const articleImageFitMeta = document.querySelector('meta[name="article-image-fit"]');
   const bioMeta = document.querySelector('meta[name="bio"]');
+  const permalinksMeta = document.querySelector('meta[name="permalinks"]');
 
   // Author
   // -------------------------------------------------------
@@ -198,6 +200,15 @@ export async function getConfig(): Promise<SiteConfig> {
   // from the author's kind-0 metadata (`about` field) at render time.
   const bio = bioMeta?.getAttribute?.('content') || '';
 
+  // How to build article links. Long-form posts (kind 30023) are replaceable:
+  // their event id changes on every edit, so linking by id breaks bookmarks
+  // after an edit. Default to the permanent `d`-tag slug so links survive
+  // edits. 'naddr' uses the self-contained NIP-19 code; 'id' restores the
+  // legacy (edit-fragile) event-id behaviour.
+  const permalinksRaw = (permalinksMeta?.getAttribute?.('content') || '').trim().toLowerCase();
+  const permalinks: 'slug' | 'naddr' | 'id' =
+    permalinksRaw === 'naddr' || permalinksRaw === 'id' ? permalinksRaw : 'slug';
+
   return {
     npub,
     readRelays,
@@ -215,6 +226,7 @@ export async function getConfig(): Promise<SiteConfig> {
     promoText,
     cacheUrl,
     articleImageFit,
-    bio
+    bio,
+    permalinks
   };
 }

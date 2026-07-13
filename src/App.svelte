@@ -123,7 +123,14 @@
   });
 
   function handleHashChange() {
-    const newHash = window.location.hash.substring(1); // Remove the leading #
+    // Remove the leading `#` and decode: article permalinks use the `d`-tag
+    // slug, which may contain percent-encoded spaces/slashes/unicode.
+    let newHash = window.location.hash.substring(1);
+    try {
+      newHash = decodeURIComponent(newHash);
+    } catch {
+      // malformed percent-encoding — keep the raw value
+    }
     if (newHash !== currentHash) {
       currentHash = newHash;
     }

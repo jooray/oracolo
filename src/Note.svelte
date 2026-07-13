@@ -2,17 +2,29 @@
   import { onMount } from 'svelte';
   import { type SiteConfig } from './config';
   import { documentTitle } from './stores/documentTitleStore';
-  import { getEventData, processAll, formatDate, getProfile, type EventData } from './utils';
+  import {
+    getEventData,
+    processAll,
+    formatDate,
+    getProfile,
+    resolvePermalink,
+    type EventData
+  } from './utils';
   import { pool } from '@nostr/gadgets/global';
-  import { neventEncode } from '@nostr/tools/nip19';
+  import { neventEncode, naddrEncode } from '@nostr/tools/nip19';
   import 'zapthreads';
   import { type NostrUser } from '@nostr/gadgets/metadata';
   import { getCache } from './cache';
+  import { type NostrEvent } from '@nostr/tools/core';
 
   let replyRelays: string[];
   let note: EventData;
   let renderedContent = '';
   let nevent = '';
+  // Anchor used for the external "Note:" link and for the comments widget.
+  // For addressable articles this is the naddr (stable across edits) so that
+  // comments stay attached to the article, not to a single version's id.
+  let anchor = '';
   let comments = false;
 
   $: documentTitle.subscribe((value) => {
@@ -34,23 +46,65 @@
     if (!profile) {
       throw new Error('npub is invalid');
     }
-    nevent = neventEncode({ id });
     comments = config.comments;
+
+    // The hash may be a permanent article slug (`d` tag), an naddr/nevent/note
+    // code, or a raw event id. Resolve it into either a concrete event id
+    // (notes, images, legacy links) or an addressable coordinate
+    // (kind:pubkey:d) that always points at the *latest* version of an article.
+    const target = resolvePermalink(id, profile.pubkey);
+
+    // Set the external anchor up front so the header link is valid during load.
+    anchor = nevent =
+      target.type === 'id'
+        ? neventEncode({ id: target.id })
+        : naddrEncode({
+            identifier: target.identifier,
+            pubkey: target.pubkey,
+            kind: target.kind,
+            relays: config.writeRelays.slice(0, 2)
+          });
+
+    const applyEvent = async (event: NostrEvent) => {
+      // Keep only the newest version of an addressable event.
+      if (note && event.created_at <= note.created_at) return;
+      note = getEventData(event);
+      documentTitle.set(note.title);
+      if (target.type === 'addr' && note.identifier) {
+        anchor = naddrEncode({
+          identifier: note.identifier,
+          pubkey: note.pubkey,
+          kind: note.kind,
+          relays: config.writeRelays.slice(0, 2)
+        });
+      } else {
+        anchor = neventEncode({ id: event.id });
+      }
+      nevent = anchor;
+      renderedContent = await processAll(note);
+    };
+
+    const matchesTarget = (e: NostrEvent): boolean =>
+      target.type === 'id'
+        ? e.id === target.id
+        : e.kind === target.kind &&
+          e.pubkey === target.pubkey &&
+          (e.tags.find(([k]) => k === 'd')?.[1] || '') === target.identifier;
 
     // Cache-first: navigating from the home grid → article view should be
     // instant since the event is almost always already in the cache file
     // (memoized in-process, so no second network roundtrip after Blog.svelte
     // populated it). Fall back to a relay subscription only if the cache
-    // doesn't have this event id.
+    // doesn't have this target.
     let renderedFromCache = false;
     if (config.cacheUrl) {
       try {
         const cache = await getCache(config.cacheUrl);
-        const cached = cache?.events.find((e) => e.id === id);
+        const cached = cache?.events
+          .filter(matchesTarget)
+          .sort((a, b) => b.created_at - a.created_at)[0];
         if (cached) {
-          note = getEventData(cached);
-          documentTitle.set(note.title);
-          renderedContent = await processAll(note);
+          await applyEvent(cached);
           renderedFromCache = true;
         }
       } catch (err) {
@@ -60,12 +114,13 @@
 
     if (renderedFromCache) return;
 
-    pool.subscribeManyEose(config.writeRelays, [{ ids: [id] }], {
-      onevent: async (event) => {
-        note = getEventData(event);
-        documentTitle.set(note.title);
-        renderedContent = await processAll(note);
-      },
+    const filter =
+      target.type === 'id'
+        ? { ids: [target.id] }
+        : { kinds: [target.kind], authors: [target.pubkey], '#d': [target.identifier] };
+
+    pool.subscribeManyEose(config.writeRelays, [filter], {
+      onevent: applyEvent,
       onclose() {}
     });
   });
@@ -102,7 +157,7 @@
     </div>
   </div>
   {#if comments}
-    <zap-threads anchor={nevent} relays={replyRelays.join(',')} />
+    <zap-threads anchor={anchor} relays={replyRelays.join(',')} />
   {/if}
 {:else}
   <!-- <Loading /> Temorary disabled, it creates scrolling issue -->

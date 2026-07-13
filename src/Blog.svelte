@@ -154,7 +154,12 @@
   >
     {#each blocks as block}
       {#if block.type === 'articles'}
-        <Articles source={articleSource} {...block.config} />
+        <Articles
+          source={articleSource}
+          {...block.config}
+          permalinks={config.permalinks}
+          permalinkRelays={config.writeRelays}
+        />
       {:else if block.type === 'notes'}
         <Notes source={noteSource} {...block.config} noMoreEvents={$loaded} />
       {:else if block.type === 'images'}
@@ -165,7 +170,14 @@
 {/if}
 
 {#if tag.length > 0 && $loaded && $totalDisplayedNotes < 12}
-  <Articles source={articleSource} minChars={10} count={40} style="grid" />
+  <Articles
+    source={articleSource}
+    minChars={10}
+    count={40}
+    style="grid"
+    permalinks={config.permalinks}
+    permalinkRelays={config.writeRelays}
+  />
   <Images source={imageSource} minChars={0} count={40} style="grid" />
   <Notes source={noteSource} minChars={0} count={40} style="grid" />
 {/if}
