@@ -226,10 +226,9 @@ articles as a grid at the top of the homepage. Pinning by `d` tag is
 edit-stable — the pin keeps pointing at the latest version across edits.
 
 A separate meta tag is used (instead of extending the `i…` block option)
-because a `d` tag can itself contain dashes (e.g.
-`dleit-info-k-bitcoin-je-retro`), and the `block:*` syntax is dash-delimited.
-`pinned-articles` values are taken verbatim, so dashes are fine; the block
-syntax is not, so put slugs here.
+because a `d` tag can itself contain dashes (e.g. `how-i-learned-to-love-nostr`),
+and the `block:*` syntax is dash-delimited. `pinned-articles` values are taken
+verbatim, so dashes are fine; the block syntax is not, so put slugs here.
 
 The legacy `i…` block pins still work — for notes (kind 1) and images (kind 20)
 they remain event-id prefixes, and for articles a full 64-char event id is
