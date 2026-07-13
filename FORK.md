@@ -19,6 +19,7 @@ behave exactly like upstream.
 - [YouTube embeds](#youtube-embeds)
 - [Latest-version-only for replaceable events](#latest-version-only-for-replaceable-events)
 - [Permanent article links that survive edits](#permanent-article-links-that-survive-edits)
+- [Edit-stable pinned articles](#edit-stable-pinned-articles)
 - [CLI bundler (no Go server required)](#cli-bundler-no-go-server-required)
 - [Migration: republish kind-1 as kind-30023](#migration-republish-kind-1-as-kind-30023)
 - [Open Graph / Twitter cards for social link previews](#open-graph--twitter-cards-for-social-link-previews)
@@ -210,6 +211,29 @@ their immutable event id.
 Comments (zapthreads) on an article are anchored to its `naddr`, so a
 discussion stays attached to the article across edits instead of resetting when
 the underlying event id changes.
+
+## Edit-stable pinned articles
+
+`<meta name="pinned-articles" content="my-first-post, another-slug">`
+
+Upstream pins events by event id via the `i…` block option (e.g.
+`<meta name="block:articles" content="i027c…-grid">`). For long-form posts that
+breaks whenever you edit the pinned article, because the event id changes.
+
+This fork adds a dedicated `pinned-articles` meta that takes a **comma-separated
+list of article `d` tags** (or full 64-char event ids). It renders those
+articles as a grid at the top of the homepage. Pinning by `d` tag is
+edit-stable — the pin keeps pointing at the latest version across edits.
+
+A separate meta tag is used (instead of extending the `i…` block option)
+because a `d` tag can itself contain dashes (e.g.
+`dleit-info-k-bitcoin-je-retro`), and the `block:*` syntax is dash-delimited.
+`pinned-articles` values are taken verbatim, so dashes are fine; the block
+syntax is not, so put slugs here.
+
+The legacy `i…` block pins still work — for notes (kind 1) and images (kind 20)
+they remain event-id prefixes, and for articles a full 64-char event id is
+still accepted (but is not edit-stable — prefer a `d` tag).
 
 ## CLI bundler (no Go server required)
 

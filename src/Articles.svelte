@@ -1,6 +1,12 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { formatDate, permalinkHash, type EventData, type PermalinkMode } from './utils.js';
+  import {
+    formatDate,
+    permalinkHash,
+    isPinned,
+    type EventData,
+    type PermalinkMode
+  } from './utils.js';
   import type { Config } from './config.js';
   import type { EventSource } from './blockUtils.js';
 
@@ -26,7 +32,7 @@
     (async () => {
       if (ids) {
         style = 'grid';
-        items = await source.fetchIds(ids);
+        items = await source.fetchPinned(ids);
         return;
       }
       items = await source.pluck(count, minChars);
@@ -60,7 +66,7 @@
               {/if}
               <div>
                 <span class="date">{formatDate(event.created_at)}</span>
-                {#if ids && ids.some((id) => event.id.endsWith(id))}
+                {#if ids && isPinned(event, ids)}
                   <span class="pinned">- 📌 Pinned</span>
                 {/if}
               </div>

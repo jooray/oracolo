@@ -4,7 +4,14 @@ import * as nip27 from '@nostr/tools/nip27';
 import { pool } from '@nostr/gadgets/global';
 import { Mutex } from '@livekit/mutex';
 
-import { getEventData, isRootNote, dedupeReplaceable, replaceableKey, type EventData } from './utils';
+import {
+  getEventData,
+  isRootNote,
+  dedupeReplaceable,
+  replaceableKey,
+  pinIsEventId,
+  type EventData
+} from './utils';
 import { writable } from 'svelte/store';
 
 export const loaded = writable(false);
@@ -223,10 +230,50 @@ export class EventSource {
     return results;
   }
 
-  async fetchIds(ids: string[]): Promise<EventData[]> {
-    const events = await pool.querySync(this.relays.slice(0, 5), { ids });
+  // Fetch pinned events, in the order the pins were configured.
+  //
+  // Long-form articles (kind 30023) are addressable, so a pin is either a full
+  // 64-char hex event id or an article `d` tag. `d`-tag pins are resolved to
+  // the *latest* version of the article via a coordinate query, so the pin
+  // keeps working after the article is edited (its id changes but the `d` tag
+  // does not).
+  //
+  // Notes (kind 1) and images (kind 20) are not replaceable, so their pins are
+  // always event ids, matched by prefix per NIP-01 (unchanged behaviour).
+  async fetchPinned(pins: string[]): Promise<EventData[]> {
+    const relays = this.relays.slice(0, 5);
+    const addressable = this.#kind === 30023;
+
+    const eventIds = addressable ? pins.filter(pinIsEventId) : pins;
+    const dTags = addressable ? pins.filter((p) => !pinIsEventId(p)) : [];
+
+    const queries: Promise<NostrEvent[]>[] = [];
+    if (eventIds.length) {
+      queries.push(pool.querySync(relays, { ids: eventIds }));
+    }
+    if (dTags.length) {
+      queries.push(
+        pool.querySync(relays, {
+          kinds: this.filter.kinds,
+          authors: this.filter.authors,
+          '#d': dTags
+        })
+      );
+    }
+
+    // Keep the newest version of each addressable event.
+    const fetched = dedupeReplaceable((await Promise.all(queries)).flat());
     loaded.set(true);
-    return events.map(getEventData);
+
+    const ordered = pins
+      .map((p) =>
+        addressable && !pinIsEventId(p)
+          ? fetched.find((e) => (e.tags.find(([k]) => k === 'd')?.[1] || '') === p)
+          : fetched.find((e) => e.id === p || e.id.startsWith(p))
+      )
+      .filter((e): e is NostrEvent => Boolean(e));
+
+    return ordered.map(getEventData);
   }
 }
 

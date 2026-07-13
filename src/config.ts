@@ -51,6 +51,7 @@ export async function getConfig(): Promise<SiteConfig> {
   const articleImageFitMeta = document.querySelector('meta[name="article-image-fit"]');
   const bioMeta = document.querySelector('meta[name="bio"]');
   const permalinksMeta = document.querySelector('meta[name="permalinks"]');
+  const pinnedArticlesMeta = document.querySelector('meta[name="pinned-articles"]');
 
   // Author
   // -------------------------------------------------------
@@ -148,6 +149,25 @@ export async function getConfig(): Promise<SiteConfig> {
       config
     });
   });
+
+  // Pinned articles (edit-stable)
+  // -------------------------------------------------------
+  // A comma-separated list of article `d` tags (or full 64-char event ids),
+  // rendered as a grid at the top. Kept separate from the dash-delimited
+  // `block:articles` / `i…` syntax because a `d` tag can itself contain
+  // dashes, which the block parser would split on. Values are taken verbatim.
+  // Pinning by `d` tag survives article edits (the event id changes, the `d`
+  // tag does not).
+  const pinnedArticles = (pinnedArticlesMeta?.getAttribute?.('content') || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s !== '');
+  if (pinnedArticles.length > 0) {
+    blocks.unshift({
+      type: 'articles',
+      config: { count: pinnedArticles.length, style: 'grid', minChars: 0, ids: pinnedArticles }
+    });
+  }
 
   // Fallback if no blocks are present
   if (blocks.length == 0) {

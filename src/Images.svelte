@@ -21,7 +21,7 @@
     (async () => {
       if (ids) {
         style = 'grid';
-        items = await source.fetchIds(ids);
+        items = await source.fetchPinned(ids);
         return;
       }
       items = await source.pluck(count, minChars);

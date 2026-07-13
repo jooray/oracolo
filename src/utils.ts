@@ -66,6 +66,23 @@ export function permalinkHash(
   return encodeURIComponent(event.identifier);
 }
 
+// A pinned-article reference (the `i<value>` block option) is treated as a
+// full 64-char hex event id, or otherwise as an article `d` tag. Pinning by
+// `d` tag is edit-stable; pinning by event id breaks when the article is
+// edited (its id changes), so `d` tag is preferred.
+export function pinIsEventId(pin: string): boolean {
+  return /^[0-9a-f]{64}$/.test(pin);
+}
+
+export function isPinned(
+  event: Pick<EventData, 'id' | 'identifier'>,
+  pins: string[]
+): boolean {
+  return pins.some((p) =>
+    pinIsEventId(p) ? event.id === p : event.identifier === p
+  );
+}
+
 // Resolve a URL hash back into what to fetch. Accepts, in order:
 //   • an naddr / nevent / note NIP-19 code (e.g. shared from njump),
 //   • a 64-char hex event id (notes, images, legacy article links),
