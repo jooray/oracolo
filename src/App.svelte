@@ -3,7 +3,7 @@
   import { nostrUserFromEvent, type NostrUser } from '@nostr/gadgets/metadata';
 
   import { getConfig, type SiteConfig } from './config';
-  import { getProfile, downloadHtmlApp, setLocale } from './utils';
+  import { getProfile, downloadHtmlApp, setLocale, preferDisplayName } from './utils';
   import { getCache } from './cache';
   import Home from './Blog.svelte';
   import Note from './Note.svelte';
@@ -76,7 +76,7 @@
             const cache = await getCache(configOrUndefined.cacheUrl);
             const k0 = cache?.events.find((e) => e.kind === 0);
             if (k0) {
-              profile = nostrUserFromEvent(k0);
+              profile = preferDisplayName(nostrUserFromEvent(k0));
               name = profile.metadata.name || profile.shortName;
               picture = profile.image || null;
             }

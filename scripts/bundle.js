@@ -52,7 +52,12 @@ if (!headMatch) {
   process.exit(1);
 }
 
-const headContent = headMatch[1];
+// Drop HTML comments before parsing, so commenting a block out actually
+// disables it. Without this, a commented-out <script> or <meta> is still
+// picked up by the regexes below and silently shipped in the bundle — which
+// matters for seasonal markup like a ticket popup that gets switched off
+// between events.
+const headContent = headMatch[1].replace(/<!--[\s\S]*?-->/g, '');
 
 // Extract meta tags (both name/content and name/value attributes)
 const metaTags = [];
@@ -102,6 +107,47 @@ while ((scriptMatch = scriptRegex.exec(headContent)) !== null) {
   if (content) {
     headScripts.push(content);
   }
+}
+
+// Extract per-site CSS from <head>: inline <style> blocks and local
+// <link rel="stylesheet"> files, in the order they were authored.
+//
+// The CSS is written next to the <meta> config — the natural place for it —
+// but it is emitted at the *end of the body*, after Oracolo's own bundled
+// stylesheet, so a site override actually wins the cascade without having to
+// shout `!important` at every rule. Linked files are inlined so the bundle
+// stays a single self-contained file.
+const siteStyles = [];
+const styleOrLinkRegex = /<style[^>]*>([\s\S]*?)<\/style>|<link\s+([^>]*?)\/?>/gi;
+let cssMatch;
+while ((cssMatch = styleOrLinkRegex.exec(headContent)) !== null) {
+  if (cssMatch[1] !== undefined) {
+    const inlineCss = cssMatch[1].trim();
+    if (inlineCss) siteStyles.push({ source: 'inline <style>', css: inlineCss });
+    continue;
+  }
+
+  const attrs = cssMatch[2] || '';
+  if (!/rel\s*=\s*(["'])\s*stylesheet\s*\1/i.test(attrs)) continue;
+
+  const hrefMatch = attrs.match(/href\s*=\s*(["'])([\s\S]*?)\1/i);
+  if (!hrefMatch) continue;
+  const href = hrefMatch[2].trim();
+
+  if (/^(?:[a-z]+:)?\/\//i.test(href) || /^data:/i.test(href)) {
+    console.error(
+      `Refusing to bundle remote stylesheet "${href}": the output must stay ` +
+        `self-contained. Save it next to the source and link it relatively.`
+    );
+    process.exit(1);
+  }
+
+  const cssFile = resolve(dirname(resolve(inputPath)), href);
+  if (!existsSync(cssFile)) {
+    console.error(`Linked stylesheet not found: ${href} (resolved to ${cssFile})`);
+    process.exit(1);
+  }
+  siteStyles.push({ source: href, css: readFileSync(cssFile, 'utf-8').trim() });
 }
 
 // Build the bundled HTML — matching the Go server's renderModifiedBundled() output
@@ -172,7 +218,14 @@ ${jsContent}
     <style>
 ${cssContent}
     </style>
-  </body>
+`;
+
+// Site CSS last, so it overrides Oracolo's own styles by cascade order.
+for (const style of siteStyles) {
+  output += `    <!-- site stylesheet: ${style.source} -->\n    <style>\n${style.css}\n    </style>\n`;
+}
+
+output += `  </body>
 </html>
 `;
 

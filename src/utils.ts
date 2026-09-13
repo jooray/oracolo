@@ -254,6 +254,31 @@ export async function resolveNip05(address: string): Promise<string | null> {
   }
 }
 
+/**
+ * Prefer `display_name` over `name` for the rendered author name.
+ *
+ * A kind-0 profile carries both: `name` is a handle, often written without
+ * spaces ("LunarpunkFestival"), while `display_name` is the human-facing form
+ * ("Lunarpunk Festival"). The metadata library resolves `shortName` to the
+ * handle, which reads as a typo once the name is set as a wordmark. Profiles
+ * that set only `name` are unaffected.
+ */
+export function preferDisplayName<T extends NostrUser | null>(user: T): T {
+  if (!user) return user;
+  const metadata = user.metadata as Record<string, unknown> | undefined;
+  const raw =
+    typeof metadata?.display_name === 'string'
+      ? metadata.display_name
+      : typeof metadata?.displayName === 'string'
+        ? metadata.displayName
+        : '';
+  const display = raw.trim();
+  if (display) {
+    (user as { shortName: string }).shortName = display;
+  }
+  return user;
+}
+
 export async function getProfile(code: string): Promise<NostrUser | null> {
   let pubkey: string;
   let relays: string[] = [];
@@ -289,7 +314,7 @@ export async function getProfile(code: string): Promise<NostrUser | null> {
     }
   }
 
-  return loadNostrUser({ pubkey, relays });
+  return preferDisplayName(await loadNostrUser({ pubkey, relays }));
 }
 
 export async function processUsersEntities(content: string) {

@@ -21,6 +21,7 @@ behave exactly like upstream.
 - [Permanent article links that survive edits](#permanent-article-links-that-survive-edits)
 - [Edit-stable pinned articles](#edit-stable-pinned-articles)
 - [CLI bundler (no Go server required)](#cli-bundler-no-go-server-required)
+- [Per-site CSS in the source head](#per-site-css-in-the-source-head)
 - [Migration: republish kind-1 as kind-30023](#migration-republish-kind-1-as-kind-30023)
 - [Open Graph / Twitter cards for social link previews](#open-graph--twitter-cards-for-social-link-previews)
 
@@ -248,6 +249,38 @@ node scripts/bundle.js source.html index.html   # inlines into source.html
 lang>`, `<title>`, and any inline `<script>` blocks from the head of
 `source.html`, then emits a fully-inlined HTML. Use this for pure-static
 deployments behind nginx / a CDN.
+
+HTML comments in the head are stripped before parsing, so commenting a
+block out actually disables it. Upstream's bundler ships commented-out
+`<meta>` and `<script>` tags regardless — which quietly breaks the obvious
+way to switch off seasonal markup like a ticket popup between events.
+
+## Per-site CSS in the source head
+
+A site can carry its own stylesheet next to its `<meta>` config, either
+inline or as a local file:
+
+```html
+<head>
+  <meta name="author" content="npub1…" />
+  <link rel="stylesheet" href="site.css" />
+  <style>
+    /* or inline, or both — authored order is preserved */
+  </style>
+</head>
+```
+
+`bundle.js` inlines linked files (resolved relative to the source HTML)
+and emits all of it **after** Oracolo's own stylesheet, at the end of
+`<body>`. That ordering is the point: site rules then override the
+defaults by cascade position, with no `!important` and no changes to
+`src/app.scss`, so several sites can share one engine and still look
+nothing alike.
+
+Remote `href`s (`https://…`, `//…`, `data:`) are refused rather than
+linked, because the output must stay self-contained — save a webfont or
+third-party CSS next to the source and link it relatively. A missing file
+is a hard error, not a silent skip.
 
 ## Migration: republish kind-1 as kind-30023
 
