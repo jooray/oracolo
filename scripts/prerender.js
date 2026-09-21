@@ -24,6 +24,7 @@
  */
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
+import { createHash } from 'crypto';
 import { dirname, join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { gzipSync } from 'zlib';
@@ -197,17 +198,25 @@ function writeFile(relativePath, contents) {
  * cached copy instead of shipping 500 KB of JavaScript per article. index.html
  * keeps everything inline: it stays a single self-contained file, which is
  * what the "download it" button hands people.
+ *
+ * The URLs carry a hash of the content. Static hosts routinely serve .js and
+ * .css with a far-future expiry — nginx's `expires max` is the usual rule —
+ * and under a fixed name that would pin returning visitors to the JavaScript
+ * of whichever deploy they saw first, forever.
  */
 function extractAssets(html) {
   const assets = [];
   let out = html;
+
+  const version = (content) => createHash('sha1').update(content).digest('hex').slice(0, 10);
+  const assetUrl = (name, content) => `${config.sitePath}${name}?v=${version(content)}`;
 
   const appScript = /<script data-oracolo-app>([\s\S]*?)<\/script>/i.exec(html);
   if (appScript) {
     assets.push({ name: 'app.js', content: appScript[1] });
     out = out.replace(
       appScript[0],
-      () => `<script defer src="${config.sitePath}app.js"></script>`
+      () => `<script defer src="${assetUrl('app.js', appScript[1])}"></script>`
     );
   }
 
@@ -216,18 +225,19 @@ function extractAssets(html) {
     assets.push({ name: 'app.css', content: appStyle[1] });
     out = out.replace(
       appStyle[0],
-      () => `<link rel="stylesheet" href="${config.sitePath}app.css">`
+      () => `<link rel="stylesheet" href="${assetUrl('app.css', appStyle[1])}">`
     );
   }
 
   const siteStyles = [...html.matchAll(/<style data-oracolo-site>([\s\S]*?)<\/style>/gi)];
   if (siteStyles.length) {
-    assets.push({ name: 'site.css', content: siteStyles.map((m) => m[1]).join('\n') });
+    const css = siteStyles.map((m) => m[1]).join('\n');
+    assets.push({ name: 'site.css', content: css });
     let first = true;
     for (const match of siteStyles) {
       out = out.replace(match[0], () =>
         first
-          ? ((first = false), `<link rel="stylesheet" href="${config.sitePath}site.css">`)
+          ? ((first = false), `<link rel="stylesheet" href="${assetUrl('site.css', css)}">`)
           : ''
       );
     }

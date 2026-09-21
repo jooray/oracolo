@@ -153,6 +153,11 @@ location /a/ {
 On that fallback the app adds `<meta name="robots" content="noindex">`, since
 the shell is not a page to index under someone else's URL.
 
+The shared asset URLs carry a hash of their content (`app.js?v=3b2bcda6a8`),
+so the usual `expires max` rule for `.js`/`.css` is safe: a new bundle is a new
+URL, and nobody is pinned to the JavaScript of whichever deploy they happened
+to see first.
+
 ### New meta tags
 
 ```html
