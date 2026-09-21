@@ -97,9 +97,9 @@ export function eventHref(
   return '#' + permalinkHash(event, opts.permalinks ?? 'slug', opts.relays ?? []);
 }
 
-/** The site root — where `/app.js` and the homepage live. */
+/** Where the "back to the homepage" link points. */
 export function homeHref(paths?: SeedPaths | null): string {
-  return paths ? paths.root : '#';
+  return paths ? paths.home : '#';
 }
 
 /**

@@ -21,9 +21,14 @@ set -euo pipefail
 SITE_DIR="${SITE_DIR:-$HOME/www/example.com}"
 SCRIPT_DIR="${SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 NODE="${NODE:-/usr/bin/node}"
+
+# A language mutation overrides these three and runs the script a second time
+# against the same web root: its own template, its own homepage filename, and
+# its own article directory, so the two runs never touch each other's files.
+TEMPLATE="${TEMPLATE:-$SCRIPT_DIR/index.template.html}"
+INDEX_NAME="${INDEX_NAME:-index.html}"
 ARTICLE_DIR="${ARTICLE_DIR:-a}"
 
-TEMPLATE="$SCRIPT_DIR/index.template.html"
 PRERENDER="$SCRIPT_DIR/prerender.mjs"
 
 log() { echo "[$(date +%Y-%m-%dT%H:%M:%S%z)] $*"; }
@@ -37,12 +42,15 @@ STAGE="$SITE_DIR/.staging.$$"
 trap 'rm -rf "$STAGE"' EXIT
 mkdir -p "$STAGE"
 
-log "rendering into $STAGE"
-"$NODE" "$PRERENDER" "$TEMPLATE" "$STAGE" || die "prerender failed"
+log "rendering $INDEX_NAME into $STAGE"
+# --alternates points at the live root so a language mutation can find the
+# manifest its sibling run installed, and cross-link the articles they share.
+"$NODE" "$PRERENDER" "$TEMPLATE" "$STAGE" --index "$INDEX_NAME" \
+  --alternates "$SITE_DIR" || die "prerender failed"
 
 # ---------------------------------------------------------------- validate
-[ -s "$STAGE/index.html" ] || die "no index.html produced"
-grep -q 'id="oracolo-seed"' "$STAGE/index.html" || die "index.html has no seed"
+[ -s "$STAGE/$INDEX_NAME" ] || die "no $INDEX_NAME produced"
+grep -q 'id="oracolo-seed"' "$STAGE/$INDEX_NAME" || die "$INDEX_NAME has no seed"
 
 # `find` on a missing directory exits non-zero, and pipefail would take the
 # whole script down with it — a first deploy has no article directory yet.
@@ -76,15 +84,23 @@ if [ -d "$STAGE/$ARTICLE_DIR" ]; then
   rm -rf "$SITE_DIR/$ARTICLE_DIR.old"
 fi
 
-for f in app.js app.css site.css sitemap.xml feed.xml robots.txt \
-         events-cache.json events-cache.json.gz; do
-  [ -f "$STAGE/$f" ] || continue
-  mv -f "$STAGE/$f" "$SITE_DIR/$f"
-done
+while IFS= read -r staged; do
+  base=$(basename "$staged")
+  if [ "$base" = "$INDEX_NAME" ]; then
+    continue
+  fi
+  # robots.txt is published, not generated: a site with several language
+  # mutations wants one file listing every sitemap, and each run would only
+  # know about its own.
+  if [ "$base" = "robots.txt" ] && [ -f "$SITE_DIR/robots.txt" ]; then
+    continue
+  fi
+  mv -f "$staged" "$SITE_DIR/$base"
+done < <(find "$STAGE" -maxdepth 1 -type f)
 
-if [ -f "$SITE_DIR/index.html" ]; then
-  cp -p "$SITE_DIR/index.html" "$SITE_DIR/index.html.bak"
+if [ -f "$SITE_DIR/$INDEX_NAME" ]; then
+  cp -p "$SITE_DIR/$INDEX_NAME" "$SITE_DIR/$INDEX_NAME.bak"
 fi
-mv -f "$STAGE/index.html" "$SITE_DIR/index.html"
+mv -f "$STAGE/$INDEX_NAME" "$SITE_DIR/$INDEX_NAME"
 
-log "installed $new_count article pages + index.html into $SITE_DIR"
+log "installed $new_count article pages + $INDEX_NAME into $SITE_DIR"

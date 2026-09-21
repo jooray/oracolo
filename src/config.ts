@@ -27,6 +27,8 @@ export type SiteConfig = {
   sitePath: string;
   /** Path prefix for baked article pages, e.g. "/a/". */
   articleBase: string;
+  /** Where the "homepage" link points; defaults to sitePath. */
+  homeUrl: string;
 };
 
 export type Block = {
@@ -231,6 +233,9 @@ export function parseConfig(source: MetaSource): {
   const siteUrl = (attr('site-url') || '').trim().replace(/\/+$/, '');
   const sitePath = withSlashes(attr('site-path') || '/');
   const articleBase = withSlashes(attr('article-base') || sitePath + 'a/');
+  // Language mutations put their homepage at a file, not a directory, so the
+  // homepage link cannot always be derived from the site root.
+  const homeUrl = (attr('home-url') || '').trim() || sitePath;
 
   return {
     config: {
@@ -254,7 +259,8 @@ export function parseConfig(source: MetaSource): {
       permalinks,
       siteUrl,
       sitePath,
-      articleBase
+      articleBase,
+      homeUrl
     },
     needsRelayList
   };

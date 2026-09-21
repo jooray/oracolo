@@ -18,12 +18,20 @@
  *
  * Usage: node scripts/prerender.js <template.html> <outdir> [options]
  *
- *   --no-cache     don't write events-cache.json[.gz]
+ *   --index <name> homepage filename (default index.html). A language mutation
+ *                  passes e.g. --index index-en.html, and its sitemap and feed
+ *                  pick up the same "-en" suffix so the two runs can share one
+ *                  web root without overwriting each other.
+ *   --alternates <dir>
+ *                  directory to read sibling language manifests from (normally
+ *                  the live web root). Articles that exist in more than one
+ *                  language get rel=alternate hreflang links to each other.
+ *   --no-cache     don't write the events cache
  *   --limit <n>    max events per kind to request (default 500)
  *   --quiet        only print the summary
  */
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync } from 'fs';
 import { createHash } from 'crypto';
 import { dirname, join, resolve } from 'path';
 import { fileURLToPath } from 'url';
@@ -54,6 +62,15 @@ const templatePath = positional[0];
 const outDir = positional[1];
 const limitIndex = args.indexOf('--limit');
 const limit = limitIndex >= 0 ? parseInt(args[limitIndex + 1], 10) || 500 : 500;
+const indexIndex = args.indexOf('--index');
+const indexName = indexIndex >= 0 ? args[indexIndex + 1] : 'index.html';
+// "index-en.html" → "-en", so sitemap-en.xml and feed-en.xml sit next to the
+// Slovak sitemap.xml and feed.xml instead of clobbering them.
+const suffix = indexName.replace(/^index/, '').replace(/\.html?$/, '');
+const sitemapName = `sitemap${suffix}.xml`;
+const feedName = `feed${suffix}.xml`;
+const alternatesIndex = args.indexOf('--alternates');
+const alternatesDir = alternatesIndex >= 0 ? args[alternatesIndex + 1] : null;
 const quiet = flags.has('--quiet');
 const writeCache = !flags.has('--no-cache');
 
@@ -246,6 +263,67 @@ function extractAssets(html) {
   return { html: out, assets };
 }
 
+// ------------------------------------------------------------ alternates
+
+/**
+ * Language mutations of one site share a web root, and some articles belong to
+ * both — a talk given in English is listed on the English and the Slovak site
+ * alike, as the same Nostr event. Baking gives each of those a real URL in each
+ * language, which is two URLs for one text unless they point at each other.
+ * That is what hreflang is for.
+ *
+ * Each run leaves a manifest of what it baked; the other run reads it. On a
+ * first-ever run the sibling manifest does not exist yet and no alternates are
+ * emitted — the next run picks them up.
+ */
+function manifestName(lang) {
+  return `articles-${lang || 'default'}.json`;
+}
+
+function readSiblingManifests() {
+  if (!alternatesDir) return [];
+  const mine = manifestName(config.pageLanguage);
+  let names;
+  try {
+    names = readdirSync(alternatesDir);
+  } catch {
+    return [];
+  }
+  return names
+    .filter((n) => /^articles-.+\.json$/.test(n) && n !== mine)
+    .map((n) => {
+      try {
+        return JSON.parse(readFileSync(join(alternatesDir, n), 'utf-8'));
+      } catch {
+        return null;
+      }
+    })
+    .filter((m) => m && Array.isArray(m.slugs) && m.lang);
+}
+
+function alternateLinks(slug, siblings) {
+  const lines = [];
+  for (const sibling of siblings) {
+    if (slug !== null && !sibling.slugs.includes(slug)) continue;
+    const href = absoluteUrl(slug === null ? sibling.home : sibling.base + encodeURIComponent(slug) + '/');
+    if (!href) continue;
+    lines.push(
+      `<link rel="alternate" hreflang="${escapeHtml(sibling.lang)}" href="${escapeHtml(href)}">`
+    );
+  }
+  if (lines.length && config.pageLanguage) {
+    const self = absoluteUrl(
+      slug === null ? config.homeUrl : articlePath(slug, { base: config.articleBase })
+    );
+    if (self) {
+      lines.unshift(
+        `<link rel="alternate" hreflang="${escapeHtml(config.pageLanguage)}" href="${escapeHtml(self)}">`
+      );
+    }
+  }
+  return lines;
+}
+
 // ---------------------------------------------------------------- render
 
 async function main() {
@@ -277,9 +355,14 @@ async function main() {
 
   const paths = {
     base: config.articleBase,
-    root: config.sitePath,
+    home: config.homeUrl,
     slugs: bakeable.map((a) => a.slug)
   };
+
+  const siblings = readSiblingManifests();
+  if (siblings.length) {
+    log(`Siblings: ${siblings.map((m) => `${m.lang} (${m.slugs.length})`).join(', ')}`);
+  }
 
   const { html: articleTemplate, assets } = extractAssets(template);
   for (const asset of assets) writeFile(asset.name, asset.content);
@@ -304,9 +387,9 @@ async function main() {
     '<!--oracolo:seed-->',
     `<script type="application/json" id="oracolo-seed">${serializeSeed(homeSeed)}</script>`
   );
-  homeHtml = fill(homeHtml, '<!--oracolo:head-->', homeHead());
-  writeFile('index.html', homeHtml);
-  log(`Home:    index.html (${(Buffer.byteLength(homeHtml) / 1024).toFixed(0)} KB)`);
+  homeHtml = fill(homeHtml, '<!--oracolo:head-->', homeHead(siblings));
+  writeFile(indexName, homeHtml);
+  log(`Home:    ${indexName} (${(Buffer.byteLength(homeHtml) / 1024).toFixed(0)} KB)`);
 
   // ---- article pages --------------------------------------------------
   for (const article of bakeable) {
@@ -328,32 +411,46 @@ async function main() {
       '<!--oracolo:seed-->',
       `<script type="application/json" id="oracolo-seed">${serializeSeed(seed)}</script>`
     );
-    html = fill(html, '<!--oracolo:head-->', articleHead(article, profileName));
+    html = fill(html, '<!--oracolo:head-->', articleHead(article, profileName, siblings));
 
     writeFile(join(config.articleBase.replace(/^\//, ''), article.slug, 'index.html'), html);
   }
   log(`Articles: ${bakeable.length} pages${skipped ? ` (${skipped} skipped: unsafe d tag)` : ''}`);
 
+  writeFile(manifestName(config.pageLanguage), JSON.stringify({
+    lang: config.pageLanguage,
+    base: config.articleBase,
+    home: config.homeUrl,
+    generated_at: generatedAt,
+    slugs: paths.slugs
+  }));
+
   // ---- sitemap, feed, robots, cache -----------------------------------
   if (config.siteUrl) {
-    writeFile('sitemap.xml', sitemap(bakeable));
-    writeFile('feed.xml', await feed(bakeable, profileName, generatedAt));
-    log('Extras:  sitemap.xml, feed.xml');
+    writeFile(sitemapName, sitemap(bakeable));
+    writeFile(feedName, feed(bakeable, profileName, generatedAt));
+    log(`Extras:  ${sitemapName}, ${feedName}`);
 
+    // Never overwritten: a site with several language mutations wants one
+    // robots.txt listing every sitemap, and only the first run would guess it.
     const robotsPath = join(outDir, 'robots.txt');
     if (!existsSync(robotsPath)) {
       writeFile(
         'robots.txt',
-        `User-agent: *\nAllow: /\n\nSitemap: ${absoluteUrl('/sitemap.xml')}\n`
+        `User-agent: *\nAllow: /\n\nSitemap: ${absoluteUrl('/' + sitemapName)}\n`
       );
       log('Extras:  robots.txt');
     }
   }
 
   if (writeCache) {
+    // Whatever the page is configured to fetch — a mutation uses its own file,
+    // and the currently deployed HTML still asks for it by that name.
+    const cacheName = config.cacheUrl.replace(/^.*\//, '').replace(/\.gz$/, '') ||
+      'events-cache.json';
     const cache = JSON.stringify({ generated_at: generatedAt, npub: config.npub, events });
-    writeFile('events-cache.json', cache);
-    writeFile('events-cache.json.gz', gzipSync(Buffer.from(cache)));
+    writeFile(cacheName, cache);
+    writeFile(cacheName + '.gz', gzipSync(Buffer.from(cache)));
   }
 
   console.log(
@@ -362,21 +459,22 @@ async function main() {
   );
 }
 
-function homeHead() {
+function homeHead(siblings = []) {
   const lines = [];
-  const url = absoluteUrl(config.sitePath);
+  const url = absoluteUrl(config.homeUrl);
   if (url) lines.push(`<link rel="canonical" href="${escapeHtml(url)}">`);
   if (config.siteUrl) {
     lines.push(
       `<link rel="alternate" type="application/atom+xml" href="${escapeHtml(
-        absoluteUrl('/feed.xml')
+        absoluteUrl('/' + feedName)
       )}">`
     );
   }
+  lines.push(...alternateLinks(null, siblings));
   return lines.map((l) => `    ${l}`).join('\n');
 }
 
-function articleHead(article, profileName) {
+function articleHead(article, profileName, siblings = []) {
   const { data, event, slug } = article;
   const url = absoluteUrl(articlePath(slug, { base: config.articleBase }));
   const description = plainSummary(event, data);
@@ -385,6 +483,7 @@ function articleHead(article, profileName) {
   const lines = [];
   if (description) lines.push(`<meta name="description" content="${escapeHtml(description)}">`);
   if (url) lines.push(`<link rel="canonical" href="${escapeHtml(url)}">`);
+  lines.push(...alternateLinks(slug, siblings));
   lines.push(`<meta property="og:type" content="article">`);
   lines.push(`<meta property="og:title" content="${escapeHtml(data.title)}">`);
   if (description) {
@@ -424,7 +523,7 @@ function articleHead(article, profileName) {
 
 function sitemap(articles) {
   const entries = [
-    { loc: absoluteUrl(config.sitePath), lastmod: null },
+    { loc: absoluteUrl(config.homeUrl), lastmod: null },
     ...articles.map((a) => ({
       loc: absoluteUrl(articlePath(a.slug, { base: config.articleBase })),
       lastmod: new Date(a.event.created_at * 1000).toISOString()
@@ -446,8 +545,8 @@ function sitemap(articles) {
   );
 }
 
-async function feed(articles, profileName, generatedAt) {
-  const site = absoluteUrl(config.sitePath);
+function feed(articles, profileName, generatedAt) {
+  const site = absoluteUrl(config.homeUrl);
   const entries = [];
   for (const a of articles.slice(0, 40)) {
     const url = absoluteUrl(articlePath(a.slug, { base: config.articleBase }));
@@ -469,7 +568,7 @@ async function feed(articles, profileName, generatedAt) {
     }>\n` +
     `  <title>${escapeHtml(titleOf(template))}</title>\n` +
     `  <link href="${escapeHtml(site)}"/>\n` +
-    `  <link rel="self" href="${escapeHtml(absoluteUrl('/feed.xml'))}"/>\n` +
+    `  <link rel="self" href="${escapeHtml(absoluteUrl('/' + feedName))}"/>\n` +
     `  <id>${escapeHtml(site)}</id>\n` +
     `  <updated>${new Date(generatedAt * 1000).toISOString()}</updated>\n` +
     `  <author><name>${escapeHtml(profileName)}</name></author>\n` +

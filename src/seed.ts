@@ -15,8 +15,8 @@ export const SEED_ELEMENT_ID = 'oracolo-seed';
 export interface SeedPaths {
   /** Path prefix for baked article pages, e.g. "/a/". */
   base: string;
-  /** Site root, used for asset and homepage links. */
-  root: string;
+  /** Where the "homepage" link points. */
+  home: string;
   /** `d` tags that have a baked page on disk. */
   slugs: string[];
 }
