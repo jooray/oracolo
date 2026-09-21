@@ -8,6 +8,7 @@ behave exactly like upstream.
 ## Index
 
 - [Local cache for instant first paint](#local-cache-for-instant-first-paint)
+- [Prerendered pages (baked DOM + inline seed)](#prerendered-pages-baked-dom--inline-seed)
 - [Bio in the homepage header](#bio-in-the-homepage-header)
 - [Square / non-cropped article cover art](#square--non-cropped-article-cover-art)
 - [Top menu](#top-menu)
@@ -57,6 +58,123 @@ The kind-0 event in the cache also pre-populates the author profile
 Refresh nightly via cron — see `scripts/refresh-cache.sh` referenced in
 deployment notes for an atomic install pattern (write to a temp file,
 `mv` into place).
+
+## Prerendered pages (baked DOM + inline seed)
+
+`scripts/prerender.js` bakes the events into real HTML. Instead of shipping an
+empty `<div id="app">` and fetching `events-cache.json`, the page arrives with
+the markup already in it, and each article gets its own URL on disk:
+
+```
+index.html              homepage markup + the events inlined as a seed
+a/<d-tag>/index.html    one page per article, with its own title/OG/JSON-LD
+app.js, app.css         assets the article pages share (index.html stays inline)
+sitemap.xml, feed.xml, robots.txt
+events-cache.json[.gz]  still written, for compatibility
+```
+
+Why bother, when the cache already gives an instant first paint? Because a URL
+fragment is not a document. Crawlers drop `#my-article`, so with hash-only
+links a site has exactly one indexable URL no matter how good its JavaScript
+is, and non-JS clients — Bing, Brave, Marginalia, GPTBot, ClaudeBot, social
+preview bots, anything with `curl` — see an empty page. Baking fixes the second
+half; the per-article paths fix the first.
+
+### How it runs
+
+```sh
+node build.js prod
+node scripts/bundle.js --template examples/mysite/index.html index.template.html
+node scripts/prerender.js index.template.html /path/to/webroot
+```
+
+`--template` emits the same self-contained bundle with three slots
+(`<!--oracolo:head-->`, `<!--oracolo:app-->`, `<!--oracolo:seed-->`) and
+`data-oracolo-*` markers on the inlined assets. The template is what you deploy
+when the site *code* changes; the cron turns it into pages every night. It
+carries the `<meta>` config too, so the prerenderer needs nothing else.
+
+`scripts/refresh-site.sh` is the cron wrapper: it renders into a staging
+directory inside the web root, refuses to install a run that lost most of its
+articles, and swaps the result in.
+
+### How the page stays live
+
+The seed is the machine-readable twin of the baked DOM — the same events, in a
+`<script type="application/json" id="oracolo-seed">`:
+
+1. The browser paints the baked markup before any script runs.
+2. `main.ts` reads the seed and *hydrates* that markup instead of rebuilding
+   it, so nothing flickers and nothing is re-fetched.
+3. From there it is the old behaviour exactly: `refreshSince(generated_at)`
+   asks the relays for anything newer and merges it in reactively.
+
+Server-side rendering has no `onMount` and cannot await, so the components fill
+their blocks during init when a seed is present (`EventSource.pluckSync`) and
+keep the async path for a classic boot. Without a seed nothing changes: the app
+boots, fetches the cache, and renders exactly as it did before.
+
+### Links, and not breaking the old ones
+
+Article cards link to `/a/<d-tag>/` once the site is prerendered; notes and
+images are not replaceable, have no baked page, and keep their event-id
+fragment. Every fragment form still resolves on the way in — `#<d-tag>`,
+`#<event-id>`, `#naddr1…`, `#nevent1…`, `#note1…` — so no link you have ever
+published breaks.
+
+When a fragment link lands on an article that *has* a baked page, the app
+swaps the address bar for that path with `history.replaceState`. When it does
+not — an article published since the last run, or one resolved live from a
+relay — the fragment stays, because it is the only URL that works for it.
+Rewriting to a path that would 404 on reload turns a working shared link into
+a broken one.
+
+A fragment is invisible to the server, so a `#article` load always arrives with
+the homepage baked in. A small head script hides `#app` for the moment it takes
+to route, so the index does not flash first; it clears itself on a timeout and
+is never added when there is no fragment.
+
+### Server config
+
+Article pages are directories, and an article published since the last bake has
+no directory yet, so serve the app shell as the fallback:
+
+```nginx
+location / {
+    try_files $uri $uri/ /index.html;
+    expires -1;              # revalidate HTML so a new bake reaches people
+}
+location /a/ {
+    try_files $uri $uri/ /index.html;
+    expires -1;
+}
+```
+
+On that fallback the app adds `<meta name="robots" content="noindex">`, since
+the shell is not a page to index under someone else's URL.
+
+### New meta tags
+
+```html
+<meta name="site-url" content="https://example.com">   <!-- canonical/OG/sitemap -->
+<meta name="site-path" content="/">                    <!-- default "/" -->
+<meta name="article-base" content="/a/">               <!-- default "<site-path>a/" -->
+```
+
+`site-url` is the only one most sites need; without it canonical, Open Graph,
+sitemap and feed URLs are skipped (they need an absolute origin).
+
+### Notes
+
+- Prerendering needs an explicit `<meta name="relays">`; there is no browser to
+  fall back to a relay-list lookup.
+- A `d` tag only gets a page when it is safe as a path segment and a directory
+  name (`[A-Za-z0-9][A-Za-z0-9._-]*`). Anything else keeps working, by fragment.
+- The SSR build swaps two things out of the client graph: stylesheets, and
+  `@nostr/gadgets/metadata`, which opens an IndexedDB store at module scope and
+  would throw on import in Node. `src/ssr/metadata.ts` is the stand-in.
+- Relay events are baked into HTML served to everyone, so the seed escapes `<`
+  and the generator refuses to install a run that fetched nothing.
 
 ## Bio in the homepage header
 

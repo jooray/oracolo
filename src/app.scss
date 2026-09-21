@@ -1,3 +1,11 @@
+// A prerendered page arrives with the homepage baked into #app. When the URL
+// carries a fragment permalink the app has to swap that for the article, so
+// the head script hides #app for those few milliseconds rather than flashing
+// the index. Only ever set by that script, and it clears itself on a timeout.
+html.oracolo-routing #app {
+  visibility: hidden;
+}
+
 html {
   font-size: 20px;
 

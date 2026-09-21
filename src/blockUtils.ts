@@ -17,6 +17,18 @@ import { writable } from 'svelte/store';
 export const loaded = writable(false);
 export const totalDisplayedNotes = writable(0);
 
+/**
+ * Reset the module-level render stores.
+ *
+ * In the browser these live for the lifetime of the tab, but the prerenderer
+ * renders many pages in one process — without this, `loaded` and the note
+ * tally would leak from one page's render into the next.
+ */
+export function resetRenderState(): void {
+  loaded.set(false);
+  totalDisplayedNotes.set(0);
+}
+
 export class EventSource {
   relays: string[];
   filter: Filter;
@@ -28,6 +40,7 @@ export class EventSource {
   #done: { [relay: string]: boolean } = {};
   #mutex = new Mutex();
   #sinceOverride: number | null = null;
+  #preloaded = false;
 
   constructor(relays: string[], filter: Filter) {
     this.relays = relays;
@@ -35,7 +48,13 @@ export class EventSource {
     this.#kind = filter.kinds?.[0] || 1;
   }
 
+  /** True once a cache or seed has been preloaded into this source. */
+  get preloaded(): boolean {
+    return this.#preloaded;
+  }
+
   preload(events: NostrEvent[], sinceTimestamp?: number) {
+    this.#preloaded = true;
     this.#items.push(...events);
     this.#items = dedupeReplaceable(this.#items);
     this.#items.sort((a, b) => a.created_at - b.created_at);
@@ -143,6 +162,67 @@ export class EventSource {
         this.#done[r] = true;
       });
     }
+  }
+
+  /**
+   * The synchronous half of pluck(), for an already-preloaded source.
+   *
+   * Server-side rendering has no `onMount` and cannot await, so a prerendered
+   * page takes its items straight out of the seed during component init. The
+   * consuming semantics are pluck()'s: items that pass are removed, items that
+   * fail the length filter go back for the next block to consider.
+   */
+  pluckSync(count: number, minChars: number): EventData[] {
+    const results: EventData[] = [];
+    let events = this.#items;
+    this.#items = [];
+
+    for (let i = events.length - 1; i >= 0; i--) {
+      const item = events[i];
+
+      if (minChars > 0) {
+        if (item.kind === 30023) {
+          if (item.content.length < minChars) {
+            this.#items.push(item);
+            events.splice(i, 1);
+            continue;
+          }
+        } else if (!isLengthEqualOrGreaterThanThreshold(item, minChars)) {
+          this.#items.push(item);
+          events.splice(i, 1);
+          continue;
+        }
+      }
+
+      events.splice(i, 1);
+      results.push(getEventData(item));
+
+      if (results.length === count) break;
+    }
+
+    this.#items.push(...events);
+    this.#items.sort((a, b) => a.created_at - b.created_at);
+    totalDisplayedNotes.update((v) => v + results.length);
+    loaded.set(true);
+    return results;
+  }
+
+  /**
+   * Pinned events out of the preloaded set, in the order they were configured.
+   *
+   * Like fetchPinned(), this does not consume: a pinned article still shows up
+   * in the regular block below it, exactly as it does today.
+   */
+  fetchPinnedSync(pins: string[]): EventData[] {
+    const addressable = this.#kind === 30023;
+    return pins
+      .map((p) =>
+        addressable && !pinIsEventId(p)
+          ? this.#items.find((e) => (e.tags.find(([k]) => k === 'd')?.[1] || '') === p)
+          : this.#items.find((e) => e.id === p || e.id.startsWith(p))
+      )
+      .filter((e): e is NostrEvent => Boolean(e))
+      .map(getEventData);
   }
 
   async pluck(count: number, minChars: number): Promise<EventData[]> {

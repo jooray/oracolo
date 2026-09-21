@@ -8,10 +8,18 @@
  *
  * This replicates the Go server's ?bundled=1 functionality for offline use.
  *
- * Usage: node scripts/bundle.js <input.html> [output.html]
+ * Usage: node scripts/bundle.js [--template] <input.html> [output.html]
  *
  * If output is omitted, writes to stdout.
  * The script expects dist/out.js and dist/out.css to exist (run build first).
+ *
+ * --template emits a *prerender template* instead of a finished page: the same
+ * self-contained HTML, plus the slots scripts/prerender.js fills in
+ * (<!--oracolo:head-->, <!--oracolo:app-->, <!--oracolo:seed-->) and
+ * data-oracolo-* markers on the inlined assets, so article pages can reference
+ * them as shared files instead of carrying another copy of the bundle. The
+ * template is what gets deployed to the server when the site code changes;
+ * the cron turns it into index.html and the article pages.
  */
 
 import { readFileSync, writeFileSync, existsSync } from 'fs';
@@ -21,11 +29,14 @@ import { fileURLToPath } from 'url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(__dirname, '..');
 
-const inputPath = process.argv[2];
-const outputPath = process.argv[3];
+const args = process.argv.slice(2);
+const template = args.includes('--template');
+const positional = args.filter((a) => !a.startsWith('--'));
+const inputPath = positional[0];
+const outputPath = positional[1];
 
 if (!inputPath) {
-  console.error('Usage: node scripts/bundle.js <input.html> [output.html]');
+  console.error('Usage: node scripts/bundle.js [--template] <input.html> [output.html]');
   process.exit(1);
 }
 
@@ -173,6 +184,28 @@ output += `
     <title>${title}</title>
 `;
 
+if (template) {
+  // Per-page <head> (title override, description, Open Graph, canonical,
+  // JSON-LD) is injected here by the prerenderer.
+  output += `    <!--oracolo:head-->\n`;
+
+  // A fragment permalink is invisible to the server, so a prerendered page
+  // always arrives with the homepage baked in. Hide it for the moment it
+  // takes the app to route, so `#article` does not flash the index first.
+  // Nothing happens without JavaScript: the class is only ever added by this
+  // script, and it removes itself if the app fails to boot.
+  output += `    <script>
+      (function () {
+        if (!location.hash || location.hash.length < 2) return;
+        var el = document.documentElement;
+        el.classList.add('oracolo-routing');
+        setTimeout(function () {
+          el.classList.remove('oracolo-routing');
+        }, 3000);
+      })();
+    </script>\n`;
+}
+
 // Include any head scripts (auto-redirect, etc.)
 for (const script of headScripts) {
   output += `    <script>\n${script}\n    </script>\n`;
@@ -180,8 +213,8 @@ for (const script of headScripts) {
 
 output += `  </head>
   <body>
-    <div id="app"></div>
-    <script>
+    <div id="app">${template ? '<!--oracolo:app-->' : ''}</div>
+${template ? '    <!--oracolo:seed-->\n' : ''}    <script>
       window.wnjParams = {
         position: 'bottom',
         accent: 'neutral',
@@ -212,17 +245,19 @@ output += `  </head>
         }
       })();
     </script>
-    <script>
+    <script${template ? ' data-oracolo-app' : ''}>
 ${jsContent}
     </script>
-    <style>
+    <style${template ? ' data-oracolo-app' : ''}>
 ${cssContent}
     </style>
 `;
 
 // Site CSS last, so it overrides Oracolo's own styles by cascade order.
 for (const style of siteStyles) {
-  output += `    <!-- site stylesheet: ${style.source} -->\n    <style>\n${style.css}\n    </style>\n`;
+  output += `    <!-- site stylesheet: ${style.source} -->\n    <style${
+    template ? ' data-oracolo-site' : ''
+  }>\n${style.css}\n    </style>\n`;
 }
 
 output += `  </body>
@@ -232,7 +267,9 @@ output += `  </body>
 if (outputPath) {
   writeFileSync(outputPath, output);
   const sizeKB = (Buffer.byteLength(output) / 1024).toFixed(1);
-  console.log(`Bundled ${inputPath} → ${outputPath} (${sizeKB} KB)`);
+  console.log(
+    `${template ? 'Templated' : 'Bundled'} ${inputPath} → ${outputPath} (${sizeKB} KB)`
+  );
 } else {
   process.stdout.write(output);
 }

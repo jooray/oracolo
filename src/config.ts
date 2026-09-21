@@ -1,5 +1,6 @@
 import { decode } from '@nostr/tools/nip19';
 import { loadRelayList } from '@nostr/gadgets/lists';
+import { domMetaSource, type MetaSource } from './meta';
 
 export type SiteConfig = {
   npub: string;
@@ -20,6 +21,12 @@ export type SiteConfig = {
   articleImageFit: 'cover' | 'contain' | '';
   bio: string;
   permalinks: 'slug' | 'naddr' | 'id';
+  /** Absolute site origin, needed for canonical/OG/sitemap URLs when prerendering. */
+  siteUrl: string;
+  /** Where the site is mounted, e.g. "/". */
+  sitePath: string;
+  /** Path prefix for baked article pages, e.g. "/a/". */
+  articleBase: string;
 };
 
 export type Block = {
@@ -34,30 +41,27 @@ export interface Config {
   ids?: string[];
 }
 
-export async function getConfig(): Promise<SiteConfig> {
-  const authorMeta = document.querySelector('meta[name="author"]');
-  const relaysMeta = document.querySelector('meta[name="relays"]');
-  const topicsMeta = document.querySelector('meta[name="topics"]');
-  const commentsMeta = document.querySelector('meta[name="comments"]');
-  const pageLanguageMeta = document.querySelector('meta[name="page-language"]');
-  const defaultTagMeta = document.querySelector('meta[name="default-tag"]');
-  const autoRedirectUrlMeta = document.querySelector('meta[name="auto-redirect-url"]');
-  const menuMeta = document.querySelector('meta[name="menu"]');
-  const menuLangMeta = document.querySelector('meta[name="menu-lang"]');
-  const promoImageMeta = document.querySelector('meta[name="promo-image"]');
-  const promoUrlMeta = document.querySelector('meta[name="promo-url"]');
-  const promoTextMeta = document.querySelector('meta[name="promo-text"]');
-  const cacheUrlMeta = document.querySelector('meta[name="cache-url"]');
-  const articleImageFitMeta = document.querySelector('meta[name="article-image-fit"]');
-  const bioMeta = document.querySelector('meta[name="bio"]');
-  const permalinksMeta = document.querySelector('meta[name="permalinks"]');
-  const pinnedArticlesMeta = document.querySelector('meta[name="pinned-articles"]');
+/**
+ * Parse the site config out of its <meta> tags.
+ *
+ * Synchronous and DOM-free, so the prerenderer can run the exact same parse
+ * over an HTML string that the browser runs over `document`. The one piece
+ * that may need the network — discovering relays from the author's relay list
+ * when no `relays` meta is set — is reported back through `needsRelayList`
+ * and resolved by the caller.
+ */
+export function parseConfig(source: MetaSource): {
+  config: SiteConfig;
+  needsRelayList: boolean;
+} {
+  const attr = (name: string) => source.get(name);
 
   // Author
   // -------------------------------------------------------
   let npub: string;
-  if (authorMeta) {
-    npub = authorMeta.getAttribute('content') as string;
+  const authorValue = attr('author');
+  if (authorValue) {
+    npub = authorValue;
   } else {
     console.warn('Missing meta tags for configuration, using hodlbod as a fallback');
     npub = 'npub1jlrs53pkdfjnts29kveljul2sm0actt6n8dxrrzqcersttvcuv3qdjynqn';
@@ -67,45 +71,35 @@ export async function getConfig(): Promise<SiteConfig> {
   // -------------------------------------------------------
   let readRelays: string[] = [];
   let writeRelays: string[] = [];
-  const relays = relaysMeta
-    ?.getAttribute?.('content')
+  const relays = attr('relays')
     ?.split(',')
-    .map((url) => url.trim());
+    .map((url) => url.trim())
+    .filter((url) => url !== '');
+  const needsRelayList = !(relays && relays.length > 0);
   if (relays && relays.length > 0) {
     readRelays = relays;
     writeRelays = relays;
-  } else {
-    const rl = (await loadRelayList(decode(npub).data as string)).items;
-    writeRelays = rl
-      .filter((r) => r.write)
-      .map((r) => r.url)
-      .slice(0, 5);
-    readRelays = rl.filter((r) => r.read).map((r) => r.url);
   }
 
   // Topics
   // -------------------------------------------------------
   const topics =
-    topicsMeta
-      ?.getAttribute?.('content')
+    attr('topics')
       ?.split(',')
       .map((item) => item.trim())
       .filter((item) => item !== '') || [];
 
   // Comments
-  const comments = (commentsMeta?.getAttribute?.('content') || 'no') === 'yes' ? true : false;
+  const comments = (attr('comments') || 'no') === 'yes' ? true : false;
 
   // Blocks
   // -------------------------------------------------------
   let blocks: Block[] = [];
-  const metaTags = document.querySelectorAll('meta');
   const PREFIX = 'block:';
-  metaTags.forEach((meta) => {
-    const name = meta.getAttribute('name');
+  source.all().forEach(({ name, content: value }) => {
     if (!name || !name.startsWith(PREFIX)) {
       return;
     }
-    const value = meta.getAttribute('content');
     const options = value ? value.split('-') : [];
 
     let config: Config;
@@ -158,7 +152,7 @@ export async function getConfig(): Promise<SiteConfig> {
   // dashes, which the block parser would split on. Values are taken verbatim.
   // Pinning by `d` tag survives article edits (the event id changes, the `d`
   // tag does not).
-  const pinnedArticles = (pinnedArticlesMeta?.getAttribute?.('content') || '')
+  const pinnedArticles = (attr('pinned-articles') || '')
     .split(',')
     .map((s) => s.trim())
     .filter((s) => s !== '');
@@ -181,20 +175,23 @@ export async function getConfig(): Promise<SiteConfig> {
   }
 
   // Language
-  const pageLanguage = pageLanguageMeta?.getAttribute?.('content') || '';
-  const defaultTag = defaultTagMeta?.getAttribute?.('content') || '';
-  const autoRedirectUrl = autoRedirectUrlMeta?.getAttribute?.('content') || '';
+  const pageLanguage = attr('page-language') || '';
+  const defaultTag = attr('default-tag') || '';
+  const autoRedirectUrl = attr('auto-redirect-url') || '';
 
   // Menu
-  const menuRaw = menuMeta?.getAttribute?.('content') || '';
+  const menuRaw = attr('menu') || '';
   const menuItems = menuRaw
-    ? menuRaw.split(',').map((item) => {
-        const [label, url] = item.split('|').map((s) => s.trim());
-        return { label: label || '', url: url || '' };
-      }).filter((item) => item.label && item.url)
+    ? menuRaw
+        .split(',')
+        .map((item) => {
+          const [label, url] = item.split('|').map((s) => s.trim());
+          return { label: label || '', url: url || '' };
+        })
+        .filter((item) => item.label && item.url)
     : [];
 
-  const menuLangRaw = menuLangMeta?.getAttribute?.('content') || '';
+  const menuLangRaw = attr('menu-lang') || '';
   const menuLang = menuLangRaw
     ? (() => {
         const [label, url] = menuLangRaw.split('|').map((s) => s.trim());
@@ -203,50 +200,86 @@ export async function getConfig(): Promise<SiteConfig> {
     : null;
 
   // Promo
-  const promoImage = promoImageMeta?.getAttribute?.('content') || '';
-  const promoUrl = promoUrlMeta?.getAttribute?.('content') || '';
-  const promoText = promoTextMeta?.getAttribute?.('content') || '';
+  const promoImage = attr('promo-image') || '';
+  const promoUrl = attr('promo-url') || '';
+  const promoText = attr('promo-text') || '';
 
   // Cache
-  const cacheUrl = cacheUrlMeta?.getAttribute?.('content') || '';
+  const cacheUrl = attr('cache-url') || '';
 
   // Article cover-image fit: 'cover' (default) or 'contain'.
   // 'contain' is for sites with square cover-art that should not be cropped.
-  const articleImageFitRaw = (articleImageFitMeta?.getAttribute?.('content') || '').trim().toLowerCase();
+  const articleImageFitRaw = (attr('article-image-fit') || '').trim().toLowerCase();
   const articleImageFit: 'cover' | 'contain' | '' =
     articleImageFitRaw === 'cover' || articleImageFitRaw === 'contain' ? articleImageFitRaw : '';
 
   // Optional override for the homepage bio. If empty, the bio is taken
   // from the author's kind-0 metadata (`about` field) at render time.
-  const bio = bioMeta?.getAttribute?.('content') || '';
+  const bio = attr('bio') || '';
 
   // How to build article links. Long-form posts (kind 30023) are replaceable:
   // their event id changes on every edit, so linking by id breaks bookmarks
   // after an edit. Default to the permanent `d`-tag slug so links survive
   // edits. 'naddr' uses the self-contained NIP-19 code; 'id' restores the
   // legacy (edit-fragile) event-id behaviour.
-  const permalinksRaw = (permalinksMeta?.getAttribute?.('content') || '').trim().toLowerCase();
+  const permalinksRaw = (attr('permalinks') || '').trim().toLowerCase();
   const permalinks: 'slug' | 'naddr' | 'id' =
     permalinksRaw === 'naddr' || permalinksRaw === 'id' ? permalinksRaw : 'slug';
 
+  // Prerendering only: where the site lives, so canonical/OG/sitemap URLs and
+  // baked article paths can be built.
+  const siteUrl = (attr('site-url') || '').trim().replace(/\/+$/, '');
+  const sitePath = withSlashes(attr('site-path') || '/');
+  const articleBase = withSlashes(attr('article-base') || sitePath + 'a/');
+
   return {
-    npub,
-    readRelays,
-    writeRelays,
-    topics,
-    comments,
-    blocks,
-    pageLanguage,
-    defaultTag,
-    autoRedirectUrl,
-    menuItems,
-    menuLang,
-    promoImage,
-    promoUrl,
-    promoText,
-    cacheUrl,
-    articleImageFit,
-    bio,
-    permalinks
+    config: {
+      npub,
+      readRelays,
+      writeRelays,
+      topics,
+      comments,
+      blocks,
+      pageLanguage,
+      defaultTag,
+      autoRedirectUrl,
+      menuItems,
+      menuLang,
+      promoImage,
+      promoUrl,
+      promoText,
+      cacheUrl,
+      articleImageFit,
+      bio,
+      permalinks,
+      siteUrl,
+      sitePath,
+      articleBase
+    },
+    needsRelayList
   };
+}
+
+function withSlashes(value: string): string {
+  let v = value.trim() || '/';
+  if (!v.startsWith('/')) v = '/' + v;
+  if (!v.endsWith('/')) v = v + '/';
+  return v;
+}
+
+/**
+ * Browser entry point: parse `document`, and fall back to the author's relay
+ * list when the site does not pin its relays in a <meta> tag.
+ */
+export async function getConfig(): Promise<SiteConfig> {
+  const { config, needsRelayList } = parseConfig(domMetaSource());
+  if (needsRelayList) {
+    const rl = (await loadRelayList(decode(config.npub).data as string)).items;
+    config.writeRelays = rl
+      .filter((r) => r.write)
+      .map((r) => r.url)
+      .slice(0, 5);
+    config.readRelays = rl.filter((r) => r.read).map((r) => r.url);
+  }
+  return config;
 }

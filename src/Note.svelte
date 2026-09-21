@@ -8,14 +8,16 @@
     formatDate,
     getProfile,
     resolvePermalink,
-    type EventData
+    type EventData,
+    type ResolvedTarget
   } from './utils';
   import { pool } from '@nostr/gadgets/global';
   import { neventEncode, naddrEncode } from '@nostr/tools/nip19';
-  import 'zapthreads';
   import { type NostrUser } from '@nostr/gadgets/metadata';
   import { getCache } from './cache';
   import { type NostrEvent } from '@nostr/tools/core';
+  import type { Seed } from './seed';
+  import { homeHref } from './router';
 
   let replyRelays: string[];
   let note: EventData;
@@ -27,82 +29,141 @@
   let anchor = '';
   let comments = false;
 
-  $: documentTitle.subscribe((value) => {
-    document.title = value;
-  });
-
   export let id: string;
   export let profile: NostrUser | null;
   export let config: SiteConfig;
+  export let seed: Seed | null = null;
+
+  $: if (typeof document !== 'undefined') {
+    documentTitle.subscribe((value) => {
+      document.title = value;
+    });
+  }
+
+  // The hash may be a permanent article slug (`d` tag), an naddr/nevent/note
+  // code, or a raw event id. Resolve it into either a concrete event id
+  // (notes, images, legacy links) or an addressable coordinate
+  // (kind:pubkey:d) that always points at the *latest* version of an article.
+  const target: ResolvedTarget | null = profile ? resolvePermalink(id, profile.pubkey) : null;
+
+  // Set the external anchor up front so the header link is valid during load.
+  if (target) anchor = nevent = anchorForTarget(target);
+
+  // A prerendered article page carries both its event and its rendered body,
+  // so the whole view is built during init — server-side there is no onMount,
+  // and client-side this is the markup hydration claims.
+  let seeded = false;
+  if (seed && target) {
+    const match = pickLatest(seed.events, target);
+    const pre = match && seed.rendered?.[getEventData(match).replKey];
+    if (match && pre !== undefined) {
+      applyEventSync(match, pre);
+      seeded = true;
+    }
+  }
+
+  function anchorForTarget(t: ResolvedTarget): string {
+    return t.type === 'id'
+      ? neventEncode({ id: t.id })
+      : naddrEncode({
+          identifier: t.identifier,
+          pubkey: t.pubkey,
+          kind: t.kind,
+          relays: config.writeRelays.slice(0, 2)
+        });
+  }
+
+  function matchesTarget(e: NostrEvent, t: ResolvedTarget): boolean {
+    return t.type === 'id'
+      ? e.id === t.id
+      : e.kind === t.kind &&
+          e.pubkey === t.pubkey &&
+          (e.tags.find(([k]) => k === 'd')?.[1] || '') === t.identifier;
+  }
+
+  function pickLatest(events: NostrEvent[], t: ResolvedTarget): NostrEvent | undefined {
+    return events.filter((e) => matchesTarget(e, t)).sort((a, b) => b.created_at - a.created_at)[0];
+  }
+
+  /** Render an event whose body has already been processed. */
+  function applyEventSync(event: NostrEvent, rendered: string) {
+    note = getEventData(event);
+    renderedContent = rendered;
+    anchor = nevent = anchorForEvent(event);
+  }
+
+  function anchorForEvent(event: NostrEvent): string {
+    const data = getEventData(event);
+    if (target?.type === 'addr' && data.identifier) {
+      return naddrEncode({
+        identifier: data.identifier,
+        pubkey: data.pubkey,
+        kind: data.kind,
+        relays: config.writeRelays.slice(0, 2)
+      });
+    }
+    return neventEncode({ id: event.id });
+  }
 
   onMount(async () => {
-    if (!profile) {
+    if (!profile || !target) {
       throw new Error('invalid npub');
     }
 
     replyRelays = config.readRelays;
-
-    profile = await getProfile(config.npub);
-    if (!profile) {
-      throw new Error('npub is invalid');
-    }
     comments = config.comments;
 
-    // The hash may be a permanent article slug (`d` tag), an naddr/nevent/note
-    // code, or a raw event id. Resolve it into either a concrete event id
-    // (notes, images, legacy links) or an addressable coordinate
-    // (kind:pubkey:d) that always points at the *latest* version of an article.
-    const target = resolvePermalink(id, profile.pubkey);
-
-    // Set the external anchor up front so the header link is valid during load.
-    anchor = nevent =
-      target.type === 'id'
-        ? neventEncode({ id: target.id })
-        : naddrEncode({
-            identifier: target.identifier,
-            pubkey: target.pubkey,
-            kind: target.kind,
-            relays: config.writeRelays.slice(0, 2)
-          });
+    if (comments) {
+      try {
+        await import('zapthreads');
+      } catch (err) {
+        console.warn('failed to load the comments widget', err);
+      }
+    }
 
     const applyEvent = async (event: NostrEvent) => {
       // Keep only the newest version of an addressable event.
       if (note && event.created_at <= note.created_at) return;
       note = getEventData(event);
       documentTitle.set(note.title);
-      if (target.type === 'addr' && note.identifier) {
-        anchor = naddrEncode({
-          identifier: note.identifier,
-          pubkey: note.pubkey,
-          kind: note.kind,
-          relays: config.writeRelays.slice(0, 2)
-        });
-      } else {
-        anchor = neventEncode({ id: event.id });
-      }
-      nevent = anchor;
+      anchor = nevent = anchorForEvent(event);
       renderedContent = await processAll(note);
     };
 
-    const matchesTarget = (e: NostrEvent): boolean =>
-      target.type === 'id'
-        ? e.id === target.id
-        : e.kind === target.kind &&
-          e.pubkey === target.pubkey &&
-          (e.tags.find(([k]) => k === 'd')?.[1] || '') === target.identifier;
+    if (seeded) {
+      documentTitle.set(note.title);
+      // The bake is a snapshot; if the article was edited since, the newer
+      // version replaces it in place.
+      refreshFromRelays(applyEvent);
+      return;
+    }
+
+    if (!seed) {
+      profile = await getProfile(config.npub);
+      if (!profile) {
+        throw new Error('npub is invalid');
+      }
+    }
 
     // Cache-first: navigating from the home grid → article view should be
-    // instant since the event is almost always already in the cache file
-    // (memoized in-process, so no second network roundtrip after Blog.svelte
-    // populated it). Fall back to a relay subscription only if the cache
-    // doesn't have this target.
+    // instant since the event is almost always already in the seed or the
+    // cache file (memoized in-process, so no second network roundtrip after
+    // Blog.svelte populated it). Fall back to a relay subscription only if
+    // neither has this target.
+    const seedHit = seed ? pickLatest(seed.events, target) : undefined;
+    if (seedHit) {
+      await applyEvent(seedHit);
+      return;
+    }
+
+    // With a seed in the page the cache file adds nothing: both come from the
+    // same run and hold the same events. (It would also resolve relative to
+    // the article's own path, which is not where it lives.)
     let renderedFromCache = false;
-    if (config.cacheUrl) {
+    if (config.cacheUrl && !seed) {
       try {
         const cache = await getCache(config.cacheUrl);
-        const cached = cache?.events
-          .filter(matchesTarget)
-          .sort((a, b) => b.created_at - a.created_at)[0];
+        const cached = cache ? pickLatest(cache.events, target) : undefined;
         if (cached) {
           await applyEvent(cached);
           renderedFromCache = true;
@@ -114,6 +175,11 @@
 
     if (renderedFromCache) return;
 
+    refreshFromRelays(applyEvent);
+  });
+
+  function refreshFromRelays(applyEvent: (event: NostrEvent) => Promise<void>) {
+    if (!target) return;
     const filter =
       target.type === 'id'
         ? { ids: [target.id] }
@@ -123,7 +189,7 @@
       onevent: applyEvent,
       onclose() {}
     });
-  });
+  }
 
   $: renderedHtml = renderedContent;
 </script>
@@ -135,7 +201,7 @@
     >
   </div>
   <!-- svelte-ignore a11y-invalid-attribute -->
-  <a href="#">
+  <a href={homeHref(seed?.paths)}>
     <div class="picture-container">
       <!-- svelte-ignore a11y-missing-attribute -->
       <img src={profile?.image} />
@@ -157,7 +223,7 @@
     </div>
   </div>
   {#if comments}
-    <zap-threads anchor={anchor} relays={replyRelays.join(',')} />
+    <zap-threads {anchor} relays={replyRelays.join(',')} />
   {/if}
 {:else}
   <!-- <Loading /> Temorary disabled, it creates scrolling issue -->

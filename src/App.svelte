@@ -2,28 +2,174 @@
   import { onMount, onDestroy } from 'svelte';
   import { nostrUserFromEvent, type NostrUser } from '@nostr/gadgets/metadata';
 
-  import { getConfig, type SiteConfig } from './config';
+  import { getConfig, parseConfig, type SiteConfig } from './config';
+  import { domMetaSource } from './meta';
   import { getProfile, downloadHtmlApp, setLocale, preferDisplayName } from './utils';
   import { getCache } from './cache';
+  import type { Seed } from './seed';
+  import { bakedPathFor, refFromPathname, routeFromLocation, routeKey, type Route } from './router';
   import Home from './Blog.svelte';
   import Note from './Note.svelte';
   import ThemeSwitch from './ThemeSwitch.svelte';
   import TopMenu from './TopMenu.svelte';
   import PromoPopup from './PromoPopup.svelte';
 
-  let currentHash = '';
+  /** Inline events from a prerendered page; null on a classic (fetch) boot. */
+  export let seed: Seed | null = null;
+  /** Config handed in by the prerenderer, which has no `document` to read. */
+  export let ssrConfig: SiteConfig | null = null;
+
   let profile: NostrUser | null = null;
   let missingConfig = false;
   let name = '';
   let picture: string | null = null;
-  let relays: string[] = [];
-  let config: SiteConfig;
+  let route: Route = { type: 'home' };
+
+  // A prerendered page boots synchronously: the config comes from the same
+  // <meta> parse the prerenderer ran, and the profile from the kind-0 event in
+  // the seed. This has to happen during init rather than in onMount, because
+  // hydration reuses the baked DOM and the first client render has to match it.
+  const seededConfig: SiteConfig | null =
+    ssrConfig ??
+    (seed && typeof document !== 'undefined' ? parseConfig(domMetaSource()).config : null);
+
+  let config: SiteConfig = seededConfig as SiteConfig;
+
+  if (seed && seededConfig) {
+    route = seed.route;
+    if (seededConfig.pageLanguage) setLocale(seededConfig.pageLanguage);
+    const k0 = seed.events.find((e) => e.kind === 0);
+    if (k0) {
+      profile = preferDisplayName(nostrUserFromEvent(k0));
+      name = profile.metadata.name || profile.shortName;
+      picture = profile.image || null;
+    }
+  }
+
+  $: relays = config ? Array.from(new Set(config.readRelays.concat(config.writeRelays))) : [];
 
   onMount(() => {
     // Check if the URL has a download parameter
     const urlParams = new URLSearchParams(window.location.search);
     const shouldDownload = urlParams.get('download') === 'true';
 
+    window.addEventListener('hashchange', syncRoute);
+    window.addEventListener('popstate', syncRoute);
+    document.addEventListener('click', interceptLink);
+
+    if (seed && config) {
+      // Already rendered from the seed. Point the view at whatever the URL
+      // actually asks for (a `#permalink` the server could never see), then
+      // catch up with the relays in the background.
+      document.documentElement.lang = config.pageLanguage || document.documentElement.lang;
+      syncRoute();
+      refreshProfile();
+      if (shouldDownload) downloadHtmlApp();
+      return;
+    }
+
+    bootFromNetwork(shouldDownload);
+  });
+
+  onDestroy(() => {
+    if (typeof window === 'undefined') return;
+    window.removeEventListener('hashchange', syncRoute);
+    window.removeEventListener('popstate', syncRoute);
+    document.removeEventListener('click', interceptLink);
+  });
+
+  function syncRoute() {
+    const next = routeFromLocation(seed?.paths);
+    if (routeKey(next) !== routeKey(route) || next.type !== route.type) {
+      route = next;
+    }
+    upgradeUrl();
+    markIndexability();
+    // The head script hides the app while a fragment route is resolving, so
+    // that a `#permalink` load does not flash the baked homepage first.
+    document.documentElement.classList.remove('oracolo-routing');
+  }
+
+  /**
+   * An article published since the last bake has no page on disk; the server
+   * falls back to serving the app shell so the link still works. That shell is
+   * not a page a crawler should index under that URL, so say so.
+   */
+  function markIndexability() {
+    if (!seed?.paths) return;
+    const onArticlePath = window.location.pathname.startsWith(seed.paths.base);
+    const baked = route.type === 'event' && seed.paths.slugs.includes(route.ref);
+    const meta =
+      document.querySelector<HTMLMetaElement>('meta[name="robots"][data-oracolo]') || null;
+
+    if (onArticlePath && !baked) {
+      if (!meta) {
+        const el = document.createElement('meta');
+        el.setAttribute('name', 'robots');
+        el.setAttribute('content', 'noindex');
+        el.setAttribute('data-oracolo', '');
+        document.head.appendChild(el);
+      }
+    } else if (meta) {
+      meta.remove();
+    }
+  }
+
+  /**
+   * Swap a fragment permalink for the article's real path — but only when that
+   * page exists on disk. Rewriting to a path that would 404 on reload turns a
+   * working shared link into a broken one, so anything not baked keeps the
+   * fragment it arrived with.
+   */
+  function upgradeUrl() {
+    if (!seed?.paths || !window.location.hash) return;
+    const path = bakedPathFor(route, seed.paths);
+    if (!path || window.location.pathname === path) return;
+    history.replaceState(history.state, '', path + window.location.search);
+  }
+
+  /** Keep in-app navigation to baked article pages client-side. */
+  function interceptLink(event: MouseEvent) {
+    if (!seed?.paths) return;
+    if (event.defaultPrevented || event.button !== 0) return;
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+
+    const anchor = (event.target as Element | null)?.closest?.('a');
+    if (!anchor || anchor.target || anchor.hasAttribute('download')) return;
+
+    const url = new URL(anchor.href, window.location.href);
+    if (url.origin !== window.location.origin) return;
+
+    const ref = refFromPathname(url.pathname, seed.paths);
+    if (!ref) return;
+
+    event.preventDefault();
+    if (url.pathname !== window.location.pathname) {
+      history.pushState({}, '', url.pathname + url.search);
+    }
+    route = { type: 'event', ref };
+    markIndexability();
+    window.scrollTo(0, 0);
+  }
+
+  async function refreshProfile() {
+    try {
+      const fresh = await getProfile(config.npub);
+      // A metadata lookup that finds nothing still resolves — with a
+      // placeholder carrying an empty metadata object and a truncated npub for
+      // a name. Taking that over the kind-0 event we already have would wipe
+      // the name, avatar and bio off a page that was rendering them correctly.
+      if (fresh && Object.keys(fresh.metadata || {}).length > 0) {
+        profile = fresh;
+        name = fresh.metadata.name || fresh.shortName;
+        picture = fresh.image || null;
+      }
+    } catch {
+      // keep the profile we already have
+    }
+  }
+
+  function bootFromNetwork(shouldDownload: boolean) {
     getConfig()
       .then(async (configOrUndefined) => {
         // Early return if config is undefined
@@ -41,20 +187,13 @@
         }
 
         // Destructure with default values to satisfy TypeScript
-        const {
-          npub = '',
-          readRelays = [],
-          writeRelays = [],
-          comments = false
-        } = configOrUndefined;
+        const { npub = '', comments = false } = configOrUndefined;
 
         // Validate config
         if (!npub) {
           missingConfig = true;
           return;
         }
-
-        relays = Array.from(new Set(readRelays.concat(writeRelays)));
 
         if (comments) {
           try {
@@ -65,8 +204,7 @@
           }
         }
 
-        handleHashChange();
-        window.addEventListener('hashchange', handleHashChange);
+        syncRoute();
 
         // Cache-first profile: a kind-0 event is included in
         // events-cache.json; constructing the NostrUser from it lets the
@@ -96,15 +234,7 @@
           }
         } else {
           // Background refresh in case the cached profile is stale.
-          getProfile(npub)
-            .then((fresh) => {
-              if (fresh) {
-                profile = fresh;
-                name = fresh.metadata.name || fresh.shortName;
-                picture = fresh.image || null;
-              }
-            })
-            .catch(() => {});
+          refreshProfile();
         }
 
         if (shouldDownload) {
@@ -116,31 +246,17 @@
         missingConfig = true;
         return;
       });
-  });
-
-  onDestroy(() => {
-    window.removeEventListener('hashchange', handleHashChange);
-  });
-
-  function handleHashChange() {
-    // Remove the leading `#` and decode: article permalinks use the `d`-tag
-    // slug, which may contain percent-encoded spaces/slashes/unicode.
-    let newHash = window.location.hash.substring(1);
-    try {
-      newHash = decodeURIComponent(newHash);
-    } catch {
-      // malformed percent-encoding — keep the raw value
-    }
-    if (newHash !== currentHash) {
-      currentHash = newHash;
-    }
   }
 </script>
 
 {#if config}
   <TopMenu menuItems={config.menuItems} menuLang={config.menuLang} />
   {#if config.promoUrl}
-    <PromoPopup promoImage={config.promoImage} promoUrl={config.promoUrl} promoText={config.promoText} />
+    <PromoPopup
+      promoImage={config.promoImage}
+      promoUrl={config.promoUrl}
+      promoText={config.promoText}
+    />
   {/if}
 {/if}
 
@@ -159,13 +275,13 @@
 {/if}
 
 {#if profile && Object.keys(profile).length > 0}
-  {#key currentHash}
-    {#if currentHash === ''}
-      <Home tag="" {profile} {config} />
-    {:else if currentHash.startsWith('tags/')}
-      <Home tag={currentHash} {profile} {config} />
+  {#key routeKey(route)}
+    {#if route.type === 'home'}
+      <Home tag="" {profile} {config} {seed} />
+    {:else if route.type === 'tag'}
+      <Home tag={route.tag} {profile} {config} {seed} />
     {:else}
-      <Note id={currentHash} {profile} {config} />
+      <Note id={route.ref} {profile} {config} {seed} />
     {/if}
   {/key}
 {/if}

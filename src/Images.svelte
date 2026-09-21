@@ -17,6 +17,17 @@
   const seen = new Set<string>();
   let unsubAdditions: (() => void) | null = null;
 
+  // Sync-first when the page carries a seed, so this block is part of the
+  // prerendered markup. Only for the plain layouts: `board` and `wall` need
+  // async content processing and `slide` is a client-side carousel, so those
+  // keep filling in onMount as before.
+  const seeded =
+    source?.preloaded === true && !ids && (style === 'grid' || style === 'list');
+  if (seeded) {
+    items = source.pluckSync(count, minChars);
+    for (const e of items) seen.add(e.id);
+  }
+
   onMount(() => {
     (async () => {
       if (ids) {
@@ -24,8 +35,10 @@
         items = await source.fetchPinned(ids);
         return;
       }
-      items = await source.pluck(count, minChars);
-      for (const e of items) seen.add(e.id);
+      if (!seeded) {
+        items = await source.pluck(count, minChars);
+        for (const e of items) seen.add(e.id);
+      }
 
       unsubAdditions = source.additions.subscribe((events) => {
         if (!events?.length) return;
